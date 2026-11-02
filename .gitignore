@@ -1,4 +1,2 @@
-node_modules/
+npm modules
 .env
-.env.*
-!.env.example
