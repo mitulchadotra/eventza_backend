@@ -2,7 +2,7 @@
 import crypto from "crypto";
 
 import razorpay from "../config/razorpay.js";
-import Payment from "../model/Payment.js";
+import Payment from "../model/payment.js";
 import Booking from "../model/booking.js";
 
 // Get logged-in user ID
