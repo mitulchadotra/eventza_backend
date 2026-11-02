@@ -4,7 +4,7 @@ import express from "express";
 import {
   userChat,
   adminChat,
-} from "../controller/aiController.js";
+} from "../controller/aicontroller.js";
 
 import authMiddleware from "../utils/authMiddleware.js";
 import authorizeAdmin from "../utils/authorizeAdmin.js";
