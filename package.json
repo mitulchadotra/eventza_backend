@@ -1,0 +1,36 @@
+{
+  "name": "eventzaa_backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node App.js",
+    "dev": "nodemon App.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "types": "commonjs",
+  "dependencies": {
+    "axios": "^1.20.0",
+    "bcrypt": "^6.0.0",
+    "bcryptjs": "^3.0.3",
+    "cloudinary": "^2.11.0",
+    "concurrently": "^10.0.5",
+    "cors": "^2.8.6",
+    "cross-env": "^10.1.0",
+    "crypto": "^1.0.1",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^9.9.3",
+    "multer": "^2.5.0",
+    "nodemailer": "^10.3.0",
+    "nodemon": "^3.1.14",
+    "openai": "^7.45.1",
+    "razorpay": "^2.9.8",
+    "socks": "^2.8.9"
+  }
+}
