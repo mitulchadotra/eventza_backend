@@ -5,7 +5,7 @@ import crypto from "crypto";
 
 import User from "../model/user.js";
 import LoginOtp from "../model/loginOtp.js";
-import { sendLoginOtp } from "../utils/Mailer.js";
+import { sendLoginOtp } from "../utils/mailer.js";
 
 // ================= HELPERS =================
 
