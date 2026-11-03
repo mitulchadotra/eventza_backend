@@ -1,4 +1,3 @@
-
 import mongoose from "mongoose";
 
 const loginOtpSchema = new mongoose.Schema(
@@ -6,9 +5,19 @@ const loginOtpSchema = new mongoose.Schema(
     email: {
       type: String,
       required: true,
+      unique: true,
       lowercase: true,
       trim: true,
-      unique: true,
+    },
+    userId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "userData",
+      required: true,
+    },
+    role: {
+      type: String,
+      enum: ["user", "admin"],
+      required: true,
     },
     otpHash: {
       type: String,
@@ -33,7 +42,5 @@ const loginOtpSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
-
-loginOtpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 export default mongoose.model("LoginOtp", loginOtpSchema);
