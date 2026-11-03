@@ -23,20 +23,26 @@ const app = express();
 // ================= CORS CONFIGURATION =================
 
 const allowedOrigins = [
+  // Vercel frontend URLs
+  "https://eventzaa-b4xshhsf2-mitul13.vercel.app",
   "https://eventzaa-nine.vercel.app",
-  "http://localhost:3001",
-  "http://localhost:3000",
+
+  // Local development
   "http://localhost:5173",
+  "http://localhost:3000",
+  "http://localhost:3001",
 ];
 
 app.use(
   cors({
     origin: function (origin, callback) {
+      // Allow requests without origin (Postman/server-to-server)
       if (!origin || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
 
       console.log("Blocked CORS origin:", origin);
+
       return callback(new Error("Not allowed by CORS"));
     },
 
@@ -61,12 +67,18 @@ app.use(
 
 // ================= BODY PARSER =================
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({
+  extended: true,
+  limit: "10mb",
+}));
 
 // ================= STATIC UPLOADS =================
 
-app.use("/uploads", express.static(path.resolve("uploads")));
+app.use(
+  "/uploads",
+  express.static(path.resolve("uploads"))
+);
 
 // ================= HOME ROUTE =================
 
@@ -95,7 +107,7 @@ app.use(aiRouter);
 
 app.use("/api/bookings", bookingRoute);
 
-// ================= RAZORPAY PAYMENT =================
+// ================= PAYMENT =================
 
 app.use("/api/payments", paymentRoute);
 
@@ -149,12 +161,19 @@ const startServer = async () => {
 
     console.log("MongoDB connected successfully");
 
+    // Gmail connection test (does not stop server)
     testGmailConnection().catch((error) => {
-      console.error("Gmail SMTP is not ready:", error.message);
+      console.error(
+        "Gmail SMTP is not ready:",
+        error.message
+      );
     });
 
     app.listen(PORT, "0.0.0.0", () => {
-      console.log(`Eventzaa backend running on port ${PORT}`);
+      console.log(
+        `Eventzaa backend running on port ${PORT}`
+      );
+
       console.log("Authentication API: /api/auth");
       console.log("Bookings API: /api/bookings");
       console.log("Payments API: /api/payments");
@@ -163,7 +182,11 @@ const startServer = async () => {
     });
 
   } catch (error) {
-    console.error("Failed to start backend:", error.message);
+    console.error(
+      "Failed to start backend:",
+      error.message
+    );
+
     process.exit(1);
   }
 };
