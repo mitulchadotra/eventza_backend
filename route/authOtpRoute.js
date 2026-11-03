@@ -9,7 +9,7 @@ import {
 const router = express.Router();
 
 // Direct login - OTP is disabled in controller
-router.post("/api/login", startLoginOtp);
+router.post("/login", startLoginOtp);
 
 // OTP endpoints are disabled
 router.post("/verify-login-otp", verifyLoginOtp);
