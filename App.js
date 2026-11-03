@@ -23,7 +23,7 @@ const app = express();
 // ================= CORS CONFIGURATION =================
 
 const allowedOrigins = [
-  // Vercel frontend URLs
+  // Existing Vercel deployments
   "https://eventzaa-b4xshhsf2-mitul13.vercel.app",
   "https://eventzaa-nine.vercel.app",
 
@@ -33,45 +33,70 @@ const allowedOrigins = [
   "http://localhost:3001",
 ];
 
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      // Allow requests without origin (Postman/server-to-server)
-      if (!origin || allowedOrigins.includes(origin)) {
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests without an Origin header (e.g. server-to-server).
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    // Allow explicitly listed origins.
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    // Allow this project's Vercel preview deployments only.
+    try {
+      const hostname = new URL(origin).hostname;
+
+      const isEventzaaVercelPreview =
+        /^eventzaa-[a-z0-9-]+-mitul13\.vercel\.app$/.test(hostname);
+
+      if (
+        origin.startsWith("https://") &&
+        isEventzaaVercelPreview
+      ) {
         return callback(null, true);
       }
+    } catch (error) {
+      console.error("Invalid request origin:", origin);
+    }
 
-      console.log("Blocked CORS origin:", origin);
+    console.log("Blocked CORS origin:", origin);
+    return callback(new Error("Not allowed by CORS"));
+  },
 
-      return callback(new Error("Not allowed by CORS"));
-    },
+  methods: [
+    "GET",
+    "POST",
+    "PUT",
+    "PATCH",
+    "DELETE",
+    "OPTIONS",
+  ],
 
-    methods: [
-      "GET",
-      "POST",
-      "PUT",
-      "PATCH",
-      "DELETE",
-      "OPTIONS",
-    ],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+  ],
 
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-    ],
+  credentials: true,
+  optionsSuccessStatus: 204,
+};
 
-    credentials: true,
-    optionsSuccessStatus: 204,
-  })
-);
+// Apply CORS before routes and other middleware.
+app.use(cors(corsOptions));
 
 // ================= BODY PARSER =================
 
 app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({
-  extended: true,
-  limit: "10mb",
-}));
+
+app.use(
+  express.urlencoded({
+    extended: true,
+    limit: "10mb",
+  })
+);
 
 // ================= STATIC UPLOADS =================
 
@@ -161,7 +186,7 @@ const startServer = async () => {
 
     console.log("MongoDB connected successfully");
 
-    // Gmail connection test (does not stop server)
+    // Gmail connection test should not stop the server.
     testGmailConnection().catch((error) => {
       console.error(
         "Gmail SMTP is not ready:",
@@ -170,17 +195,15 @@ const startServer = async () => {
     });
 
     app.listen(PORT, "0.0.0.0", () => {
-      console.log(
-        `Eventzaa backend running on port ${PORT}`
-      );
-
+      console.log(`Eventzaa backend running on port ${PORT}`);
       console.log("Authentication API: /api/auth");
+      console.log("Login API: /api/auth/login");
+      console.log("OTP verification: /api/auth/verify-login-otp");
       console.log("Bookings API: /api/bookings");
       console.log("Payments API: /api/payments");
       console.log("User Chatbot API: /api/ai/user-chat");
       console.log("Admin Chatbot API: /api/ai/admin-chat");
     });
-
   } catch (error) {
     console.error(
       "Failed to start backend:",
