@@ -16,7 +16,7 @@ import authOtpRouter from "./route/authOtpRoute.js";
 import paymentRoute from "./route/paymentRoute.js";
 import aiRouter from "./route/aiRoute.js";
 
-import { testGmailConnection } from "./utils/mailer.js";
+import { testMailConnection } from "./utils/mailer.js";
 
 const app = express();
 
@@ -178,9 +178,9 @@ const startServer = async () => {
 
     console.log("MongoDB connected successfully");
 
-    // Gmail connection test should not stop the server.
-    testGmailConnection().catch((error) => {
-      console.error("Gmail SMTP is not ready:", error.message);
+    // Email provider checks should not stop the server.
+    testMailConnection().catch((error) => {
+      console.error("Email provider is not ready:", error.message);
     });
 
     app.listen(PORT, "0.0.0.0", () => {
