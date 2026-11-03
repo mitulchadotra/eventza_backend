@@ -2,7 +2,6 @@
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import User from "../model/user.js";
-import LoginOtp from "../model/loginOtp.js";
 
 // ========================================
 // HELPERS
@@ -124,9 +123,6 @@ export const startLoginOtp = async (req, res) => {
     // Update last login
     user.lastLoginAt = new Date();
     await user.save();
-
-    // Remove previous pending OTP
-    await LoginOtp.deleteOne({ email });
 
     return res.status(200).json({
       status: 1,
