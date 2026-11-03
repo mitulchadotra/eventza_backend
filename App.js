@@ -20,26 +20,56 @@ import { testGmailConnection } from "./utils/mailer.js";
 
 const app = express();
 
-// CORS
+// ================= CORS CONFIGURATION =================
+
+const allowedOrigins = [
+  "https://eventzaa-nine.vercel.app",
+  "http://localhost:3001",
+  "http://localhost:3000",
+  "http://localhost:5173",
+];
+
 app.use(
   cors({
-    origin: [
-      "http://localhost:5173",
-      "http://localhost:3000",
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      console.log("Blocked CORS origin:", origin);
+      return callback(new Error("Not allowed by CORS"));
+    },
+
+    methods: [
+      "GET",
+      "POST",
+      "PUT",
+      "PATCH",
+      "DELETE",
+      "OPTIONS",
     ],
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+    ],
+
+    credentials: true,
+    optionsSuccessStatus: 204,
   })
 );
 
-// Body parser
+// ================= BODY PARSER =================
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Static uploads
+// ================= STATIC UPLOADS =================
+
 app.use("/uploads", express.static(path.resolve("uploads")));
 
-// Home
+// ================= HOME ROUTE =================
+
 app.get("/", (req, res) => {
   res.status(200).json({
     status: 1,
@@ -47,24 +77,30 @@ app.get("/", (req, res) => {
   });
 });
 
-// Authentication routes
+// ================= AUTHENTICATION ROUTES =================
+
 app.use("/api/auth", authOtpRouter);
 
-// User, event and category routes
+// ================= USER, EVENT, CATEGORY =================
+
 app.use(userRouter);
 app.use(eventRouter);
 app.use(categoryRouter);
 
-// AI chatbot routes
+// ================= AI CHATBOT =================
+
 app.use(aiRouter);
 
-// Booking routes
+// ================= BOOKING =================
+
 app.use("/api/bookings", bookingRoute);
 
-// Razorpay payment routes
+// ================= RAZORPAY PAYMENT =================
+
 app.use("/api/payments", paymentRoute);
 
-// Test routes
+// ================= TEST ROUTES =================
+
 app.get("/api/auth/test", (req, res) => {
   res.status(200).json({
     status: 1,
@@ -79,7 +115,8 @@ app.get("/api/payments/test", (req, res) => {
   });
 });
 
-// 404 handler
+// ================= 404 HANDLER =================
+
 app.use((req, res) => {
   res.status(404).json({
     status: 0,
@@ -87,7 +124,8 @@ app.use((req, res) => {
   });
 });
 
-// Error handler
+// ================= ERROR HANDLER =================
+
 app.use((err, req, res, next) => {
   console.error("Server error:", err);
 
@@ -101,7 +139,8 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start server
+// ================= START SERVER =================
+
 const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
@@ -114,16 +153,15 @@ const startServer = async () => {
       console.error("Gmail SMTP is not ready:", error.message);
     });
 
-    app.listen(PORT, () => {
-      console.log(
-        `Eventzaa backend running at http://localhost:${PORT}`
-      );
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Eventzaa backend running on port ${PORT}`);
       console.log("Authentication API: /api/auth");
       console.log("Bookings API: /api/bookings");
       console.log("Payments API: /api/payments");
       console.log("User Chatbot API: /api/ai/user-chat");
       console.log("Admin Chatbot API: /api/ai/admin-chat");
     });
+
   } catch (error) {
     console.error("Failed to start backend:", error.message);
     process.exit(1);
