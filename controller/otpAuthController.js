@@ -12,6 +12,9 @@ import { sendLoginOtp } from "../utils/mailer.js";
 const normalizeEmail = (email) =>
   String(email || "").trim().toLowerCase();
 
+const normalizeRole = (role) =>
+  String(role || "user").trim().toLowerCase();
+
 const generateOtp = () =>
   crypto.randomInt(100000, 1000000).toString();
 
@@ -19,7 +22,7 @@ const hashOtp = (email, otp) => {
   const pepper = process.env.OTP_PEPPER;
 
   if (!pepper) {
-    throw new Error("OTP_PEPPER is missing in .env");
+    throw new Error("OTP_PEPPER is missing in environment variables");
   }
 
   return crypto
@@ -39,7 +42,7 @@ const createLoginToken = (user) => {
     {
       id: user._id,
       email: user.email,
-      role: user.role,
+      role: normalizeRole(user.role),
     },
     secret,
     { expiresIn: "24h" }
@@ -54,18 +57,16 @@ const safeUser = (user) => ({
   phone: user.phone || "",
   address: user.address || "",
   image: user.image || "",
-  role: user.role,
+  role: normalizeRole(user.role),
 });
 
-// ================= START LOGIN OTP =================
+// ================= START LOGIN =================
 
 export const startLoginOtp = async (req, res) => {
   try {
     const email = normalizeEmail(req.body.email);
     const password = String(req.body.password || "");
-    const requestedRole = String(req.body.role || "")
-      .trim()
-      .toLowerCase();
+    const requestedRole = normalizeRole(req.body.role);
 
     if (!email || !password) {
       return res.status(400).json({
@@ -74,6 +75,7 @@ export const startLoginOtp = async (req, res) => {
       });
     }
 
+    // Find user
     const user = await User.findOne({ email }).select("+password");
 
     if (!user) {
@@ -83,6 +85,7 @@ export const startLoginOtp = async (req, res) => {
       });
     }
 
+    // Verify password
     const passwordMatched = await bcrypt.compare(
       password,
       user.password
@@ -95,9 +98,7 @@ export const startLoginOtp = async (req, res) => {
       });
     }
 
-    const userRole = String(user.role || "user")
-      .trim()
-      .toLowerCase();
+    const userRole = normalizeRole(user.role);
 
     if (!["user", "admin"].includes(userRole)) {
       return res.status(403).json({
@@ -106,6 +107,7 @@ export const startLoginOtp = async (req, res) => {
       });
     }
 
+    // Verify selected role
     if (requestedRole && requestedRole !== userRole) {
       return res.status(403).json({
         status: 0,
@@ -113,11 +115,32 @@ export const startLoginOtp = async (req, res) => {
       });
     }
 
-    // Admin and user both require OTP.
+    // ================= ADMIN DIRECT LOGIN =================
+
+    if (userRole === "admin") {
+      const token = createLoginToken(user);
+
+      user.lastLoginAt = new Date();
+      await user.save();
+
+      // Remove any old pending OTP for this email
+      await LoginOtp.deleteOne({ email });
+
+      return res.status(200).json({
+        status: 1,
+        success: true,
+        requiresOtp: false,
+        message: "Admin login successful",
+        token,
+        user: safeUser(user),
+      });
+    }
+
+    // ================= USER OTP LOGIN =================
 
     const existingOtp = await LoginOtp.findOne({ email });
 
-    // Prevent repeated OTP requests within 30 seconds.
+    // 30-second resend protection
     if (
       existingOtp?.lastSentAt &&
       Date.now() - new Date(existingOtp.lastSentAt).getTime() < 30000
@@ -129,9 +152,7 @@ export const startLoginOtp = async (req, res) => {
     }
 
     const otp = generateOtp();
-
     const otpHash = hashOtp(email, otp);
-
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
     await LoginOtp.findOneAndUpdate(
@@ -144,10 +165,10 @@ export const startLoginOtp = async (req, res) => {
           expiresAt,
           attempts: 0,
           lastSentAt: new Date(),
+          resendCount: 0,
         },
         $setOnInsert: {
           email,
-          resendCount: 0,
         },
       },
       {
@@ -172,18 +193,17 @@ export const startLoginOtp = async (req, res) => {
       email,
       role: userRole,
     });
-
   } catch (error) {
-    console.error("Start login OTP error:", error);
+    console.error("Start login error:", error);
 
     return res.status(500).json({
       status: 0,
-      message: error.message || "Unable to send login OTP",
+      message: error.message || "Unable to login",
     });
   }
 };
 
-// ================= VERIFY LOGIN OTP =================
+// ================= VERIFY USER OTP =================
 
 export const verifyLoginOtp = async (req, res) => {
   try {
@@ -203,6 +223,16 @@ export const verifyLoginOtp = async (req, res) => {
       return res.status(400).json({
         status: 0,
         message: "OTP not found. Please login again",
+      });
+    }
+
+    // OTP must belong to a normal user
+    if (normalizeRole(otpRecord.role) !== "user") {
+      await LoginOtp.deleteOne({ email });
+
+      return res.status(403).json({
+        status: 0,
+        message: "OTP verification is only available for user accounts",
       });
     }
 
@@ -255,11 +285,9 @@ export const verifyLoginOtp = async (req, res) => {
       });
     }
 
-    const currentRole = String(user.role || "user")
-      .trim()
-      .toLowerCase();
+    const currentRole = normalizeRole(user.role);
 
-    if (currentRole !== otpRecord.role) {
+    if (currentRole !== "user" || currentRole !== normalizeRole(otpRecord.role)) {
       await LoginOtp.deleteOne({ email });
 
       return res.status(403).json({
@@ -278,11 +306,11 @@ export const verifyLoginOtp = async (req, res) => {
     return res.status(200).json({
       status: 1,
       success: true,
+      requiresOtp: false,
       message: "OTP verified successfully. Login successful",
       token,
       user: safeUser(user),
     });
-
   } catch (error) {
     console.error("Verify login OTP error:", error);
 
@@ -293,7 +321,7 @@ export const verifyLoginOtp = async (req, res) => {
   }
 };
 
-// ================= RESEND LOGIN OTP =================
+// ================= RESEND USER OTP =================
 
 export const resendLoginOtp = async (req, res) => {
   try {
@@ -312,6 +340,13 @@ export const resendLoginOtp = async (req, res) => {
       return res.status(400).json({
         status: 0,
         message: "Login session expired. Please login again",
+      });
+    }
+
+    if (normalizeRole(otpRecord.role) !== "user") {
+      return res.status(403).json({
+        status: 0,
+        message: "OTP resend is only available for user accounts",
       });
     }
 
@@ -335,15 +370,12 @@ export const resendLoginOtp = async (req, res) => {
 
     const user = await User.findById(otpRecord.userId);
 
-    if (
-      !user ||
-      String(user.role || "user").toLowerCase() !== otpRecord.role
-    ) {
+    if (!user || normalizeRole(user.role) !== "user") {
       await LoginOtp.deleteOne({ email });
 
       return res.status(400).json({
         status: 0,
-        message: "Account not found. Please login again",
+        message: "User account not found. Please login again",
       });
     }
 
@@ -369,7 +401,6 @@ export const resendLoginOtp = async (req, res) => {
       success: true,
       message: "New OTP sent successfully",
     });
-
   } catch (error) {
     console.error("Resend login OTP error:", error);
 
