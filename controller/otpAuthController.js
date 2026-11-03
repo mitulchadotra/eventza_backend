@@ -12,6 +12,9 @@ import { sendLoginOtp } from "../utils/mailer.js";
 const normalizeEmail = (email) =>
   String(email || "").trim().toLowerCase();
 
+const normalizeRole = (role) =>
+  String(role || "user").trim().toLowerCase();
+
 const generateOtp = () =>
   crypto.randomInt(100000, 1000000).toString();
 
@@ -39,7 +42,7 @@ const createLoginToken = (user) => {
     {
       id: user._id,
       email: user.email,
-      role: user.role,
+      role: normalizeRole(user.role),
     },
     secret,
     { expiresIn: "24h" }
@@ -54,7 +57,7 @@ const safeUser = (user) => ({
   phone: user.phone || "",
   address: user.address || "",
   image: user.image || "",
-  role: user.role,
+  role: normalizeRole(user.role),
 });
 
 // ================= START LOGIN OTP =================
@@ -63,9 +66,7 @@ export const startLoginOtp = async (req, res) => {
   try {
     const email = normalizeEmail(req.body.email);
     const password = String(req.body.password || "");
-    const requestedRole = String(req.body.role || "")
-      .trim()
-      .toLowerCase();
+    const requestedRole = normalizeRole(req.body.role);
 
     if (!email || !password) {
       return res.status(400).json({
@@ -95,9 +96,7 @@ export const startLoginOtp = async (req, res) => {
       });
     }
 
-    const userRole = String(user.role || "user")
-      .trim()
-      .toLowerCase();
+    const userRole = normalizeRole(user.role);
 
     if (!["user", "admin"].includes(userRole)) {
       return res.status(403).json({
@@ -113,7 +112,23 @@ export const startLoginOtp = async (req, res) => {
       });
     }
 
-    // Admin and user both require OTP.
+    if (userRole === "admin") {
+      const token = createLoginToken(user);
+
+      user.lastLoginAt = new Date();
+      await user.save();
+
+      await LoginOtp.deleteOne({ email });
+
+      return res.status(200).json({
+        status: 1,
+        success: true,
+        requiresOtp: false,
+        message: "Admin login successful",
+        token,
+        user: safeUser(user),
+      });
+    }
 
     const existingOtp = await LoginOtp.findOne({ email });
 
@@ -144,10 +159,10 @@ export const startLoginOtp = async (req, res) => {
           expiresAt,
           attempts: 0,
           lastSentAt: new Date(),
+          resendCount: 0,
         },
         $setOnInsert: {
           email,
-          resendCount: 0,
         },
       },
       {
@@ -206,6 +221,15 @@ export const verifyLoginOtp = async (req, res) => {
       });
     }
 
+    if (normalizeRole(otpRecord.role) !== "user") {
+      await LoginOtp.deleteOne({ email });
+
+      return res.status(403).json({
+        status: 0,
+        message: "OTP verification is only available for user accounts",
+      });
+    }
+
     if (new Date(otpRecord.expiresAt).getTime() <= Date.now()) {
       await LoginOtp.deleteOne({ email });
 
@@ -255,11 +279,9 @@ export const verifyLoginOtp = async (req, res) => {
       });
     }
 
-    const currentRole = String(user.role || "user")
-      .trim()
-      .toLowerCase();
+    const currentRole = normalizeRole(user.role);
 
-    if (currentRole !== otpRecord.role) {
+    if (currentRole !== "user" || currentRole !== normalizeRole(otpRecord.role)) {
       await LoginOtp.deleteOne({ email });
 
       return res.status(403).json({
@@ -278,6 +300,7 @@ export const verifyLoginOtp = async (req, res) => {
     return res.status(200).json({
       status: 1,
       success: true,
+      requiresOtp: false,
       message: "OTP verified successfully. Login successful",
       token,
       user: safeUser(user),
@@ -315,6 +338,13 @@ export const resendLoginOtp = async (req, res) => {
       });
     }
 
+    if (normalizeRole(otpRecord.role) !== "user") {
+      return res.status(403).json({
+        status: 0,
+        message: "OTP resend is only available for user accounts",
+      });
+    }
+
     const lastSent = otpRecord.lastSentAt
       ? new Date(otpRecord.lastSentAt).getTime()
       : 0;
@@ -335,15 +365,12 @@ export const resendLoginOtp = async (req, res) => {
 
     const user = await User.findById(otpRecord.userId);
 
-    if (
-      !user ||
-      String(user.role || "user").toLowerCase() !== otpRecord.role
-    ) {
+    if (!user || normalizeRole(user.role) !== "user") {
       await LoginOtp.deleteOne({ email });
 
       return res.status(400).json({
         status: 0,
-        message: "Account not found. Please login again",
+        message: "User account not found. Please login again",
       });
     }
 
