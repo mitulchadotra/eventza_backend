@@ -1,142 +1,121 @@
-
-import nodemailer from "nodemailer";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-// ================= GMAIL CONFIGURATION =================
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
 
-const gmailUser = process.env.GMAIL_USER;
+const RESEND_FROM_EMAIL =
+  process.env.RESEND_FROM_EMAIL || "Eventzaa <onboarding@resend.dev>";
 
-const gmailPassword = process.env.GMAIL_APP_PASSWORD?.replace(/\s/g, "");
+// ================= CHECK CONFIGURATION =================
 
-if (!gmailUser || !gmailPassword) {
-  throw new Error(
-    "GMAIL_USER or GMAIL_APP_PASSWORD missing in environment variables"
-  );
-}
+const checkResendConfig = () => {
+  if (!RESEND_API_KEY) {
+    throw new Error("RESEND_API_KEY is missing in Render Environment");
+  }
+};
 
-// ================= SMTP TRANSPORTER =================
-
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 465,
-  secure: true,
-  auth: {
-    user: gmailUser,
-    pass: gmailPassword,
-  },
-  connectionTimeout: 15000,
-  greetingTimeout: 15000,
-  socketTimeout: 20000,
-});
-
-// ================= TEST GMAIL CONNECTION =================
+// ================= TEST RESEND CONFIGURATION =================
 
 export const testGmailConnection = async () => {
-  try {
-    await transporter.verify();
-
-    console.log("GMAIL SMTP CONNECTION SUCCESSFUL");
-
-    return true;
-  } catch (error) {
-    console.error("GMAIL SMTP CONNECTION ERROR:", {
-      message: error.message,
-      code: error.code,
-      response: error.response,
-      command: error.command,
-    });
-
-    throw error;
-  }
+  checkResendConfig();
+  console.log("RESEND API CONFIGURATION SUCCESSFUL");
+  return true;
 };
 
 // ================= SEND OTP EMAIL =================
 
 export const sendOtpEmail = async (email, otp) => {
   try {
+    checkResendConfig();
+
     if (!email || !otp) {
       throw new Error("Email and OTP are required");
     }
 
-    const result = await transporter.sendMail({
-      from: `"Eventzaa" <${gmailUser}>`,
-      to: email,
-      subject: "Your Eventzaa Login OTP",
+    const response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: RESEND_FROM_EMAIL,
+        to: [email],
+        subject: "Your Eventzaa Login OTP",
 
-      text: `
-Your Eventzaa login OTP is ${otp}.
+        text: `Your Eventzaa login OTP is ${otp}.
 
 It expires in 5 minutes.
-Do not share this OTP with anyone.
-      `,
+Do not share this OTP with anyone.`,
 
-      html: `
-        <div style="
-          font-family: Arial, sans-serif;
-          max-width: 500px;
-          margin: auto;
-          padding: 25px;
-          border: 1px solid #e5e7eb;
-          border-radius: 12px;
-          background: #ffffff;
-        ">
-          <h2 style="color: #2563eb;">
-            Eventzaa Login Verification
-          </h2>
-
-          <p>Hello,</p>
-
-          <p>Your login verification code is:</p>
-
-          <h1 style="
-            letter-spacing: 8px;
-            color: #2563eb;
-            background: #eff6ff;
-            padding: 15px;
-            text-align: center;
-            border-radius: 8px;
+        html: `
+          <div style="
+            font-family: Arial, sans-serif;
+            max-width: 500px;
+            margin: auto;
+            padding: 25px;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            background: #ffffff;
           ">
-            ${otp}
-          </h1>
+            <h2 style="color: #2563eb;">
+              Eventzaa Login Verification
+            </h2>
 
-          <p>
-            This OTP expires in <b>5 minutes</b>.
-          </p>
+            <p>Hello,</p>
+            <p>Your login verification code is:</p>
 
-          <p style="color: #dc2626;">
-            Do not share this OTP with anyone.
-          </p>
+            <h1 style="
+              letter-spacing: 8px;
+              color: #2563eb;
+              background: #eff6ff;
+              padding: 15px;
+              text-align: center;
+              border-radius: 8px;
+            ">
+              ${otp}
+            </h1>
 
-          <hr />
+            <p>This OTP expires in <b>5 minutes</b>.</p>
 
-          <p style="color: #6b7280; font-size: 12px;">
-            This is an automated email from Eventzaa.
-            Please do not reply.
-          </p>
-        </div>
-      `,
+            <p style="color: #dc2626;">
+              Do not share this OTP with anyone.
+            </p>
+
+            <hr />
+
+            <p style="color: #6b7280; font-size: 12px;">
+              This is an automated email from Eventzaa.
+              Please do not reply.
+            </p>
+          </div>
+        `,
+      }),
+      signal: AbortSignal.timeout(20000),
     });
 
-    console.log("OTP EMAIL SENT:", result.messageId);
+    const result = await response.json();
+
+    if (!response.ok) {
+      console.error("RESEND API ERROR:", result);
+
+      throw new Error(
+        result.message || `Email sending failed: ${response.status}`
+      );
+    }
+
+    console.log("OTP EMAIL SENT:", result.id);
 
     return result;
   } catch (error) {
-    console.error("GMAIL SMTP ERROR:", {
-      message: error.message,
-      code: error.code,
-      response: error.response,
-      command: error.command,
-    });
-
+    console.error("RESEND EMAIL ERROR:", error.message);
     throw error;
   }
 };
 
 // ================= CONTROLLER COMPATIBILITY =================
 
-// otpAuthController.js can import sendLoginOtp.
 export const sendLoginOtp = sendOtpEmail;
 
 export default sendOtpEmail;
