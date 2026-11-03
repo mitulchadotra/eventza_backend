@@ -5,6 +5,7 @@ import upload from "../utils/uploadmiddleware.js";
 import {
   adduser,
   loginUser,
+  verifyLoginOtp,
   getUser,
   getSingleUser,
   UpdateUser,
@@ -13,20 +14,48 @@ import {
 
 const router = express.Router();
 
-// Register and login
-router.post("/api/register",upload.single("image"), adduser);
-router.post("/api/login", loginUser);
+// Register
+router.post(
+  "/api/register",
+  upload.single("image"),
+  adduser
+);
+
+// Login - password check and send Gmail OTP
+router.post(
+  "/api/login",
+  loginUser
+);
+
+// Verify Gmail OTP
+router.post(
+  "/api/verify-login-otp",
+  verifyLoginOtp
+);
 
 // Get all users
-router.get("/api/users", getUser);
+router.get(
+  "/api/users",
+  getUser
+);
 
 // Get single user
-router.get("/api/users/:uid", getSingleUser);
+router.get(
+  "/api/users/:uid",
+  getSingleUser
+);
 
 // Update user
-router.put("/api/users/:id", UpdateUser);
+router.put(
+  "/api/users/:id",
+  upload.single("image"),
+  UpdateUser
+);
 
 // Delete user
-router.delete("/api/users/:uid", DeleteUser);
+router.delete(
+  "/api/users/:uid",
+  DeleteUser
+);
 
 export default router;

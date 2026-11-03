@@ -3,7 +3,9 @@ import userData from "../model/user.js";
 import bcrypt from "bcrypt";
 import generateToken from "../utils/jwtutils.js";
 import mongoose from "mongoose";
+import crypto from "crypto";
 import cloudinary from "../config/cloudinary.js";
+import { sendOtpEmail } from "../utils/mailer.js";
 
 // =============================================
 // CLOUDINARY IMAGE UPLOAD
@@ -14,16 +16,28 @@ const uploadImageToCloudinary = (buffer) => {
     const stream = cloudinary.uploader.upload_stream(
       { folder: "user_images" },
       (error, result) => {
-        if (error) {
-          return reject(error);
-        }
-
+        if (error) return reject(error);
         resolve(result);
       }
     );
 
     stream.end(buffer);
   });
+};
+
+// =============================================
+// OTP HELPERS
+// =============================================
+
+const generateOTP = () => {
+  return crypto.randomInt(100000, 1000000).toString();
+};
+
+const hashOTP = (otp) => {
+  return crypto
+    .createHash("sha256")
+    .update(otp)
+    .digest("hex");
 };
 
 // =============================================
@@ -73,7 +87,6 @@ export const adduser = async (req, res) => {
       });
     }
 
-    // Check existing user
     const existingUser = await userData.findOne({
       email: normalizedEmail
     });
@@ -86,7 +99,6 @@ export const adduser = async (req, res) => {
       });
     }
 
-    // Upload profile image
     let imageUrl = "";
 
     if (req.file) {
@@ -97,13 +109,8 @@ export const adduser = async (req, res) => {
       imageUrl = result.secure_url;
     }
 
-    // Hash password
-    const hashedPassword = await bcrypt.hash(
-      password,
-      10
-    );
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create user
     const savedUser = await userData.create({
       name: name.trim(),
       email: normalizedEmail,
@@ -116,7 +123,6 @@ export const adduser = async (req, res) => {
     });
 
     const safeUser = savedUser.toObject();
-
     delete safeUser.password;
 
     return res.status(201).json({
@@ -147,7 +153,7 @@ export const adduser = async (req, res) => {
 };
 
 // =============================================
-// LOGIN USER
+// LOGIN - PASSWORD CHECK + SEND OTP
 // =============================================
 
 export const loginUser = async (req, res) => {
@@ -160,7 +166,6 @@ export const loginUser = async (req, res) => {
     const password = req.body?.password;
     const requestedRole = req.body?.role;
 
-    // Validate input
     if (
       !email ||
       typeof password !== "string" ||
@@ -173,7 +178,6 @@ export const loginUser = async (req, res) => {
       });
     }
 
-    // Find user and include password
     const foundUser = await userData
       .findOne({ email })
       .select("+password");
@@ -186,13 +190,10 @@ export const loginUser = async (req, res) => {
       });
     }
 
-    // Check stored password
     if (
       typeof foundUser.password !== "string" ||
       !foundUser.password
     ) {
-      console.error("Password hash missing for user:", email);
-
       return res.status(500).json({
         status: 0,
         success: false,
@@ -200,7 +201,6 @@ export const loginUser = async (req, res) => {
       });
     }
 
-    // Compare password
     const passwordMatches = await bcrypt.compare(
       password,
       foundUser.password
@@ -214,7 +214,6 @@ export const loginUser = async (req, res) => {
       });
     }
 
-    // Verify role
     if (
       requestedRole &&
       !["user", "admin"].includes(requestedRole)
@@ -237,26 +236,40 @@ export const loginUser = async (req, res) => {
       });
     }
 
-    // Update last login
-    foundUser.lastLoginAt = new Date();
+    // Generate OTP
+    const otp = generateOTP();
+
+    // Save hashed OTP in database
+    foundUser.loginOtp = hashOTP(otp);
+    foundUser.loginOtpExpiry = new Date(
+      Date.now() + 5 * 60 * 1000
+    );
 
     await foundUser.save();
 
-    // Generate JWT
-    const token = generateToken(foundUser);
+    // Send OTP through Gmail
+    try {
+      await sendOtpEmail(foundUser.email, otp);
+    } catch (mailError) {
+      console.error("Gmail OTP error:", mailError);
 
-    // Remove password
-    const safeUser = foundUser.toObject();
+      foundUser.loginOtp = undefined;
+      foundUser.loginOtpExpiry = undefined;
+      await foundUser.save();
 
-    delete safeUser.password;
+      return res.status(503).json({
+        status: 0,
+        success: false,
+        message: "Gmail could not send OTP. Check Gmail SMTP configuration."
+      });
+    }
 
     return res.status(200).json({
       status: 1,
       success: true,
-      message: "Login successful",
-      token,
-      user: safeUser,
-      data: safeUser
+      otpRequired: true,
+      message: "OTP sent successfully to your Gmail",
+      email: foundUser.email
     });
 
   } catch (error) {
@@ -271,6 +284,110 @@ export const loginUser = async (req, res) => {
 };
 
 // =============================================
+// VERIFY OTP - GENERATE JWT AFTER VERIFICATION
+// =============================================
+
+export const verifyLoginOtp = async (req, res) => {
+  try {
+    const email =
+      typeof req.body?.email === "string"
+        ? req.body.email.trim().toLowerCase()
+        : "";
+
+    const otp =
+      typeof req.body?.otp === "string"
+        ? req.body.otp.trim()
+        : "";
+
+    if (!email || !/^\d{6}$/.test(otp)) {
+      return res.status(400).json({
+        status: 0,
+        success: false,
+        message: "Valid email and 6-digit OTP are required"
+      });
+    }
+
+    const foundUser = await userData
+      .findOne({ email })
+      .select("+loginOtp +loginOtpExpiry");
+
+    if (!foundUser || !foundUser.loginOtp) {
+      return res.status(400).json({
+        status: 0,
+        success: false,
+        message: "OTP not found. Please login again."
+      });
+    }
+
+    if (
+      !foundUser.loginOtpExpiry ||
+      foundUser.loginOtpExpiry.getTime() < Date.now()
+    ) {
+      foundUser.loginOtp = undefined;
+      foundUser.loginOtpExpiry = undefined;
+      await foundUser.save();
+
+      return res.status(400).json({
+        status: 0,
+        success: false,
+        message: "OTP expired. Please login again."
+      });
+    }
+
+    const submittedHash = hashOTP(otp);
+
+    const savedHash = Buffer.from(foundUser.loginOtp, "hex");
+    const enteredHash = Buffer.from(submittedHash, "hex");
+
+    if (
+      savedHash.length !== enteredHash.length ||
+      !crypto.timingSafeEqual(savedHash, enteredHash)
+    ) {
+      return res.status(401).json({
+        status: 0,
+        success: false,
+        message: "Incorrect OTP. Please try again."
+      });
+    }
+
+    // OTP correct: clear OTP
+    foundUser.loginOtp = undefined;
+    foundUser.loginOtpExpiry = undefined;
+
+    foundUser.lastLoginAt = new Date();
+
+    await foundUser.save();
+
+    // Generate JWT only after successful OTP verification
+    const token = generateToken(foundUser);
+
+    const safeUser = foundUser.toObject();
+
+    delete safeUser.password;
+    delete safeUser.loginOtp;
+    delete safeUser.loginOtpExpiry;
+
+    return res.status(200).json({
+      status: 1,
+      success: true,
+      message: "OTP verified successfully. Login successful.",
+      token,
+      user: safeUser,
+      data: safeUser
+    });
+
+  } catch (error) {
+    console.error("OTP verification error:", error);
+
+    return res.status(500).json({
+      status: 0,
+      success: false,
+      message: "OTP verification failed"
+    });
+  }
+};
+
+// =============================================
 // GET ALL USERS
 // =============================================
 
@@ -278,7 +395,7 @@ export const getUser = async (req, res) => {
   try {
     const users = await userData
       .find()
-      .select("-password")
+      .select("-password -loginOtp -loginOtpExpiry")
       .sort({ createdAt: -1 });
 
     return res.status(200).json({
@@ -317,7 +434,7 @@ export const getSingleUser = async (req, res) => {
 
     const user = await userData
       .findById(uid)
-      .select("-password");
+      .select("-password -loginOtp -loginOtpExpiry");
 
     if (!user) {
       return res.status(404).json({
@@ -371,10 +488,7 @@ export const UpdateUser = async (req, res) => {
     const updates = {};
 
     if (name !== undefined) {
-      if (
-        typeof name !== "string" ||
-        !name.trim()
-      ) {
+      if (typeof name !== "string" || !name.trim()) {
         return res.status(400).json({
           status: 0,
           success: false,
@@ -386,10 +500,7 @@ export const UpdateUser = async (req, res) => {
     }
 
     if (email !== undefined) {
-      if (
-        typeof email !== "string" ||
-        !email.trim()
-      ) {
+      if (typeof email !== "string" || !email.trim()) {
         return res.status(400).json({
           status: 0,
           success: false,
@@ -400,15 +511,9 @@ export const UpdateUser = async (req, res) => {
       updates.email = email.trim().toLowerCase();
     }
 
-    if (phone !== undefined) {
-      updates.phone = phone;
-    }
+    if (phone !== undefined) updates.phone = phone;
+    if (address !== undefined) updates.address = address;
 
-    if (address !== undefined) {
-      updates.address = address;
-    }
-
-    // Upload new image if provided
     if (req.file) {
       const result = await uploadImageToCloudinary(
         req.file.buffer
@@ -434,7 +539,7 @@ export const UpdateUser = async (req, res) => {
           runValidators: true
         }
       )
-      .select("-password");
+      .select("-password -loginOtp -loginOtpExpiry");
 
     if (!updatedUser) {
       return res.status(404).json({

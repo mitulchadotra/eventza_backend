@@ -47,13 +47,29 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
+
+    // Gmail Login OTP
+    loginOtp: {
+      type: String,
+      select: false,
+    },
+
+    loginOtpExpiry: {
+      type: Date,
+      select: false,
+    },
+
+    lastLoginAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,
   }
 );
 
-// Use existing MongoDB collection: userdatas
+// Existing MongoDB collection
 const User =
   mongoose.models.User ||
   mongoose.model("User", userSchema, "userdatas");
