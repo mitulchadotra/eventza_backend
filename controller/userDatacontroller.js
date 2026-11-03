@@ -5,16 +5,19 @@ import generateToken from "../utils/jwtutils.js";
 import mongoose from "mongoose";
 import cloudinary from "../config/cloudinary.js";
 
-// ---------------------------------------------
+// =============================================
 // CLOUDINARY IMAGE UPLOAD
-// ---------------------------------------------
+// =============================================
 
 const uploadImageToCloudinary = (buffer) => {
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       { folder: "user_images" },
       (error, result) => {
-        if (error) return reject(error);
+        if (error) {
+          return reject(error);
+        }
+
         resolve(result);
       }
     );
@@ -23,20 +26,19 @@ const uploadImageToCloudinary = (buffer) => {
   });
 };
 
-// ---------------------------------------------
+// =============================================
 // REGISTER USER
-// ---------------------------------------------
+// =============================================
 
 export const adduser = async (req, res) => {
   try {
-    const { name, email, password, phone, address } = req.body ?? {};
-
-    let imageUrl = "";
-
-    if (req.file) {
-      const result = await uploadImageToCloudinary(req.file.buffer);
-      imageUrl = result.secure_url;
-    }
+    const {
+      name,
+      email,
+      password,
+      phone,
+      address
+    } = req.body ?? {};
 
     if (
       typeof name !== "string" ||
@@ -48,32 +50,52 @@ export const adduser = async (req, res) => {
     ) {
       return res.status(400).json({
         status: 0,
-        message: "Name, email and password are required",
+        success: false,
+        message: "Name, email and password are required"
       });
     }
 
     if (password.length < 6) {
       return res.status(400).json({
         status: 0,
-        message: "Password must be at least 6 characters",
+        success: false,
+        message: "Password must be at least 6 characters"
       });
     }
 
     const normalizedEmail = email.trim().toLowerCase();
 
+    // Check existing user
     const existingUser = await userData.findOne({
-      email: normalizedEmail,
+      email: normalizedEmail
     });
 
     if (existingUser) {
       return res.status(409).json({
         status: 0,
-        message: "Email already registered",
+        success: false,
+        message: "Email already registered"
       });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    // Upload profile image
+    let imageUrl = "";
 
+    if (req.file) {
+      const result = await uploadImageToCloudinary(
+        req.file.buffer
+      );
+
+      imageUrl = result.secure_url;
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(
+      password,
+      10
+    );
+
+    // Create user
     const savedUser = await userData.create({
       name: name.trim(),
       email: normalizedEmail,
@@ -82,38 +104,43 @@ export const adduser = async (req, res) => {
       password: hashedPassword,
       role: "user",
       image: imageUrl,
-      lastLoginAt: null,
+      lastLoginAt: null
     });
 
     const safeUser = savedUser.toObject();
+
     delete safeUser.password;
 
     return res.status(201).json({
       status: 1,
+      success: true,
       message: "User registered successfully",
       user: safeUser,
-      data: safeUser,
+      data: safeUser
     });
+
   } catch (error) {
     console.error("Registration error:", error);
 
     if (error.code === 11000) {
       return res.status(409).json({
         status: 0,
-        message: "Email already registered",
+        success: false,
+        message: "Email already registered"
       });
     }
 
     return res.status(500).json({
       status: 0,
-      message: "Registration failed",
+      success: false,
+      message: "Registration failed"
     });
   }
 };
 
-// ---------------------------------------------
+// =============================================
 // LOGIN USER
-// ---------------------------------------------
+// =============================================
 
 export const loginUser = async (req, res) => {
   try {
@@ -123,15 +150,22 @@ export const loginUser = async (req, res) => {
         : "";
 
     const password = req.body?.password;
+    const requestedRole = req.body?.role;
 
-    if (!email || typeof password !== "string" || !password) {
+    // Validate input
+    if (
+      !email ||
+      typeof password !== "string" ||
+      !password
+    ) {
       return res.status(400).json({
         status: 0,
-        message: "Email and password are required",
+        success: false,
+        message: "Email and password are required"
       });
     }
 
-    // Find user and load password hash
+    // Find user and include password
     const foundUser = await userData
       .findOne({ email })
       .select("+password");
@@ -139,70 +173,98 @@ export const loginUser = async (req, res) => {
     if (!foundUser) {
       return res.status(401).json({
         status: 0,
-        message: "Invalid email or password",
+        success: false,
+        message: "Invalid email or password"
       });
     }
 
+    // Check stored password
     if (
       typeof foundUser.password !== "string" ||
       !foundUser.password
     ) {
-      console.error("User password hash is missing");
+      console.error("Password hash missing for user:", email);
 
       return res.status(500).json({
         status: 0,
-        message: "Stored password hash is missing",
+        success: false,
+        message: "Stored password hash is missing"
       });
     }
 
-    // Compare entered password with bcrypt hash
+    // Compare password
     const passwordMatches = await bcrypt.compare(
       password,
       foundUser.password
     );
 
-    // Incorrect password
     if (!passwordMatches) {
       return res.status(401).json({
         status: 0,
-        message: "Invalid email or password",
+        success: false,
+        message: "Invalid email or password"
       });
     }
 
-    // -----------------------------------------
-    // UPDATE LAST LOGIN DATE
-    // -----------------------------------------
+    // Verify role
+    if (
+      requestedRole &&
+      !["user", "admin"].includes(requestedRole)
+    ) {
+      return res.status(400).json({
+        status: 0,
+        success: false,
+        message: "Invalid account role"
+      });
+    }
 
+    if (
+      requestedRole &&
+      foundUser.role !== requestedRole
+    ) {
+      return res.status(403).json({
+        status: 0,
+        success: false,
+        message: `This account is not registered as ${requestedRole}`
+      });
+    }
+
+    // Update last login
     foundUser.lastLoginAt = new Date();
+
     await foundUser.save();
 
-    // Generate JWT token
+    // Generate JWT
     const token = generateToken(foundUser);
 
-    // Remove password from response
+    // Remove password
     const safeUser = foundUser.toObject();
+
     delete safeUser.password;
 
     return res.status(200).json({
       status: 1,
+      success: true,
       message: "Login successful",
       token,
       user: safeUser,
-      data: safeUser,
+      data: safeUser
     });
+
   } catch (error) {
     console.error("Login error:", error);
 
     return res.status(500).json({
       status: 0,
-      message: "Login failed due to a server error",
+      success: false,
+      message: "Login failed due to a server error"
     });
   }
 };
 
-// ---------------------------------------------
+// =============================================
 // GET ALL USERS
-// ---------------------------------------------
+// =============================================
 
 export const getUser = async (req, res) => {
   try {
@@ -213,22 +275,25 @@ export const getUser = async (req, res) => {
 
     return res.status(200).json({
       status: 1,
+      success: true,
       message: "Users retrieved successfully",
-      data: users,
+      data: users
     });
+
   } catch (error) {
     console.error("Get users error:", error);
 
     return res.status(500).json({
       status: 0,
-      message: "Failed to retrieve users",
+      success: false,
+      message: "Failed to retrieve users"
     });
   }
 };
 
-// ---------------------------------------------
+// =============================================
 // GET SINGLE USER
-// ---------------------------------------------
+// =============================================
 
 export const getSingleUser = async (req, res) => {
   try {
@@ -237,7 +302,8 @@ export const getSingleUser = async (req, res) => {
     if (!mongoose.isValidObjectId(uid)) {
       return res.status(400).json({
         status: 0,
-        message: "Invalid user ID",
+        success: false,
+        message: "Invalid user ID"
       });
     }
 
@@ -248,28 +314,32 @@ export const getSingleUser = async (req, res) => {
     if (!user) {
       return res.status(404).json({
         status: 0,
-        message: "User not found",
+        success: false,
+        message: "User not found"
       });
     }
 
     return res.status(200).json({
       status: 1,
+      success: true,
       message: "User retrieved successfully",
-      data: user,
+      data: user
     });
+
   } catch (error) {
     console.error("Get single user error:", error);
 
     return res.status(500).json({
       status: 0,
-      message: "Failed to retrieve user",
+      success: false,
+      message: "Failed to retrieve user"
     });
   }
 };
 
-// ---------------------------------------------
+// =============================================
 // UPDATE USER
-// ---------------------------------------------
+// =============================================
 
 export const UpdateUser = async (req, res) => {
   try {
@@ -278,18 +348,29 @@ export const UpdateUser = async (req, res) => {
     if (!mongoose.isValidObjectId(id)) {
       return res.status(400).json({
         status: 0,
-        message: "Invalid user ID",
+        success: false,
+        message: "Invalid user ID"
       });
     }
 
-    const { name, email, phone, address } = req.body ?? {};
+    const {
+      name,
+      email,
+      phone,
+      address
+    } = req.body ?? {};
+
     const updates = {};
 
     if (name !== undefined) {
-      if (typeof name !== "string" || !name.trim()) {
+      if (
+        typeof name !== "string" ||
+        !name.trim()
+      ) {
         return res.status(400).json({
           status: 0,
-          message: "Name cannot be empty",
+          success: false,
+          message: "Name cannot be empty"
         });
       }
 
@@ -297,10 +378,14 @@ export const UpdateUser = async (req, res) => {
     }
 
     if (email !== undefined) {
-      if (typeof email !== "string" || !email.trim()) {
+      if (
+        typeof email !== "string" ||
+        !email.trim()
+      ) {
         return res.status(400).json({
           status: 0,
-          message: "Email cannot be empty",
+          success: false,
+          message: "Email cannot be empty"
         });
       }
 
@@ -315,10 +400,20 @@ export const UpdateUser = async (req, res) => {
       updates.address = address;
     }
 
+    // Upload new image if provided
+    if (req.file) {
+      const result = await uploadImageToCloudinary(
+        req.file.buffer
+      );
+
+      updates.image = result.secure_url;
+    }
+
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({
         status: 0,
-        message: "No fields provided to update",
+        success: false,
+        message: "No fields provided to update"
       });
     }
 
@@ -328,7 +423,7 @@ export const UpdateUser = async (req, res) => {
         { $set: updates },
         {
           returnDocument: "after",
-          runValidators: true,
+          runValidators: true
         }
       )
       .select("-password");
@@ -336,35 +431,40 @@ export const UpdateUser = async (req, res) => {
     if (!updatedUser) {
       return res.status(404).json({
         status: 0,
-        message: "User not found",
+        success: false,
+        message: "User not found"
       });
     }
 
     return res.status(200).json({
       status: 1,
+      success: true,
       message: "User updated successfully",
-      data: updatedUser,
+      data: updatedUser
     });
+
   } catch (error) {
     console.error("Update user error:", error);
 
     if (error.code === 11000) {
       return res.status(409).json({
         status: 0,
-        message: "Email already registered",
+        success: false,
+        message: "Email already registered"
       });
     }
 
     return res.status(500).json({
       status: 0,
-      message: "Failed to update user",
+      success: false,
+      message: "Failed to update user"
     });
   }
 };
 
-// ---------------------------------------------
+// =============================================
 // DELETE USER
-// ---------------------------------------------
+// =============================================
 
 export const DeleteUser = async (req, res) => {
   try {
@@ -373,7 +473,8 @@ export const DeleteUser = async (req, res) => {
     if (!mongoose.isValidObjectId(uid)) {
       return res.status(400).json({
         status: 0,
-        message: "Invalid user ID",
+        success: false,
+        message: "Invalid user ID"
       });
     }
 
@@ -382,20 +483,24 @@ export const DeleteUser = async (req, res) => {
     if (!deletedUser) {
       return res.status(404).json({
         status: 0,
-        message: "User not found",
+        success: false,
+        message: "User not found"
       });
     }
 
     return res.status(200).json({
       status: 1,
-      message: "User deleted successfully",
+      success: true,
+      message: "User deleted successfully"
     });
+
   } catch (error) {
     console.error("Delete user error:", error);
 
     return res.status(500).json({
       status: 0,
-      message: "Failed to delete user",
+      success: false,
+      message: "Failed to delete user"
     });
   }
 };
