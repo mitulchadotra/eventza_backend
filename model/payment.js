@@ -9,9 +9,12 @@ const paymentSchema = new mongoose.Schema(
       required: true,
     },
 
+    // Aapke existing user model ka naam userData hai.
+    // Agar actual mongoose.model name "User" hai,
+    // to ref ko "User" kar dein.
     userId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      ref: "userData",
       required: true,
     },
 
@@ -21,24 +24,9 @@ const paymentSchema = new mongoose.Schema(
       default: null,
     },
 
-    userName: {
-      type: String,
-      default: "",
-      trim: true,
-    },
-
-    email: {
-      type: String,
-      default: "",
-      lowercase: true,
-      trim: true,
-    },
-
-    eventTitle: {
-      type: String,
-      default: "",
-      trim: true,
-    },
+    userName: { type: String, default: "", trim: true },
+    email: { type: String, default: "", lowercase: true, trim: true },
+    eventTitle: { type: String, default: "", trim: true },
 
     amount: {
       type: Number,
@@ -53,7 +41,7 @@ const paymentSchema = new mongoose.Schema(
 
     paymentMethod: {
       type: String,
-      enum: ["UPI", "Card", "Cash"],
+      enum: ["UPI", "Card", "Cash", "Netbanking", "Wallet", "EMI"],
       default: "UPI",
     },
 
@@ -65,7 +53,8 @@ const paymentSchema = new mongoose.Schema(
 
     razorpayOrderId: {
       type: String,
-      default: "",
+      unique: true,
+      sparse: true,
     },
 
     razorpayPaymentId: {
@@ -86,7 +75,7 @@ const paymentSchema = new mongoose.Schema(
 
     paymentDate: {
       type: Date,
-      default: Date.now,
+      default: null,
     },
 
     description: {
@@ -94,9 +83,7 @@ const paymentSchema = new mongoose.Schema(
       default: "",
     },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
 const Payment =

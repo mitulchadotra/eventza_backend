@@ -4,8 +4,11 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
-  throw new Error("Razorpay credentials missing in .env");
+if (
+  !process.env.RAZORPAY_KEY_ID ||
+  !process.env.RAZORPAY_KEY_SECRET
+) {
+  throw new Error("Razorpay credentials missing in environment variables");
 }
 
 const razorpay = new Razorpay({

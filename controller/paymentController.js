@@ -1,28 +1,30 @@
 
 import crypto from "crypto";
-
 import razorpay from "../config/razorpay.js";
 import Payment from "../model/payment.js";
 import Booking from "../model/booking.js";
 
-// Get logged-in user ID
 const getUserId = (req) =>
   req.user?._id || req.user?.id || req.user?.userId;
 
-// Normalize payment method
 const getPaymentMethod = (method) => {
   const value = String(method || "").toLowerCase();
 
-  if (value === "card") return "Card";
-  if (value === "upi") return "UPI";
+  const methods = {
+    upi: "UPI",
+    card: "Card",
+    netbanking: "Netbanking",
+    wallet: "Wallet",
+    emi: "EMI",
+    paylater: "Wallet",
+  };
 
-  return "UPI";
+  return methods[value] || "UPI";
 };
 
-// --------------------------------------------------
+// ========================================
 // CREATE RAZORPAY ORDER
-// POST /api/payments/create-order
-// --------------------------------------------------
+// ========================================
 
 export const createPaymentOrder = async (req, res) => {
   try {
@@ -32,18 +34,17 @@ export const createPaymentOrder = async (req, res) => {
     if (!userId) {
       return res.status(401).json({
         success: false,
-        message: "Please login first.",
+        message: "Please login first",
       });
     }
 
     if (!bookingId) {
       return res.status(400).json({
         success: false,
-        message: "Booking ID is required.",
+        message: "Booking ID is required",
       });
     }
 
-    // Only find this user's booking
     const booking = await Booking.findOne({
       _id: bookingId,
       userId,
@@ -52,7 +53,7 @@ export const createPaymentOrder = async (req, res) => {
     if (!booking) {
       return res.status(404).json({
         success: false,
-        message: "Booking not found.",
+        message: "Booking not found",
       });
     }
 
@@ -61,24 +62,27 @@ export const createPaymentOrder = async (req, res) => {
     ) {
       return res.status(400).json({
         success: false,
-        message: "This booking is already paid.",
+        message: "This booking is already paid",
       });
     }
 
     const amount = Number(
-      booking.totalAmount ?? booking.price
+      booking.totalAmount ??
+      (Number(booking.price) * Number(booking.quantity || 1))
     );
 
     if (!Number.isFinite(amount) || amount <= 0) {
       return res.status(400).json({
         success: false,
-        message: "Invalid booking amount.",
+        message: "Invalid booking amount",
       });
     }
 
-    // Razorpay accepts amount in paise
+    // Amount is stored in rupees; Razorpay requires paise.
+    const amountInPaise = Math.round(amount * 100);
+
     const order = await razorpay.orders.create({
-      amount: Math.round(amount * 100),
+      amount: amountInPaise,
       currency: "INR",
       receipt: `booking_${booking._id}`,
       notes: {
@@ -91,8 +95,8 @@ export const createPaymentOrder = async (req, res) => {
       bookingId: booking._id,
       userId,
       eventId: booking.eventId || null,
-      userName: booking.userName || req.user.name || "",
-      email: req.user.email || "",
+      userName: req.user.name || booking.userName || "",
+      email: req.user.email || booking.email || "",
       eventTitle: booking.eventTitle || "",
       amount,
       currency: "INR",
@@ -104,7 +108,7 @@ export const createPaymentOrder = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: "Razorpay order created successfully.",
+      message: "Razorpay order created",
       key: process.env.RAZORPAY_KEY_ID,
       order: {
         id: order.id,
@@ -114,20 +118,18 @@ export const createPaymentOrder = async (req, res) => {
       paymentId: payment._id,
     });
   } catch (error) {
-    console.error("CREATE PAYMENT ORDER ERROR:", error);
+    console.error("Create payment order error:", error);
 
     return res.status(500).json({
       success: false,
-      message: "Unable to create payment order.",
-      error: error.message,
+      message: error.message || "Unable to create payment order",
     });
   }
 };
 
-// --------------------------------------------------
+// ========================================
 // VERIFY RAZORPAY PAYMENT
-// POST /api/payments/verify
-// --------------------------------------------------
+// ========================================
 
 export const verifyPayment = async (req, res) => {
   try {
@@ -142,7 +144,7 @@ export const verifyPayment = async (req, res) => {
     if (!userId) {
       return res.status(401).json({
         success: false,
-        message: "Please login first.",
+        message: "Please login first",
       });
     }
 
@@ -153,7 +155,7 @@ export const verifyPayment = async (req, res) => {
     ) {
       return res.status(400).json({
         success: false,
-        message: "Razorpay verification details are missing.",
+        message: "Payment verification details are missing",
       });
     }
 
@@ -165,88 +167,70 @@ export const verifyPayment = async (req, res) => {
     if (!payment) {
       return res.status(404).json({
         success: false,
-        message: "Payment record not found.",
+        message: "Payment record not found",
       });
     }
 
     if (payment.paymentStatus === "success") {
-      return res.status(200).json({
+      return res.json({
         success: true,
-        message: "Payment already verified.",
+        message: "Payment already verified",
         payment,
       });
     }
 
-    const body =
-      razorpay_order_id + "|" + razorpay_payment_id;
-
-    const expectedSignature = crypto
-      .createHmac(
-        "sha256",
-        process.env.RAZORPAY_KEY_SECRET
-      )
-      .update(body)
+    const generatedSignature = crypto
+      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+      .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest("hex");
 
-    const signaturesMatch =
-      expectedSignature.length === razorpay_signature.length &&
-      crypto.timingSafeEqual(
-        Buffer.from(expectedSignature),
-        Buffer.from(razorpay_signature)
-      );
+    const signatureBuffer = Buffer.from(generatedSignature);
+    const receivedBuffer = Buffer.from(razorpay_signature);
 
-    if (!signaturesMatch) {
-      payment.paymentStatus = "failed";
-      await payment.save();
-
+    if (
+      signatureBuffer.length !== receivedBuffer.length ||
+      !crypto.timingSafeEqual(signatureBuffer, receivedBuffer)
+    ) {
       return res.status(400).json({
         success: false,
-        message: "Payment signature verification failed.",
+        message: "Invalid payment signature",
       });
     }
 
-    // Fetch payment from Razorpay to confirm its status
-    const razorpayPayment =
-      await razorpay.payments.fetch(razorpay_payment_id);
+    // Verify payment details directly with Razorpay.
+    const razorpayPayment = await razorpay.payments.fetch(
+      razorpay_payment_id
+    );
 
     if (
       razorpayPayment.order_id !== razorpay_order_id ||
-      Number(razorpayPayment.amount) !==
-        Math.round(payment.amount * 100) ||
+      Number(razorpayPayment.amount) !== Math.round(payment.amount * 100) ||
       razorpayPayment.currency !== payment.currency
     ) {
       return res.status(400).json({
         success: false,
-        message: "Payment details do not match the order.",
+        message: "Payment details do not match",
       });
     }
 
+    // Do not mark authorized payments as successful.
     if (razorpayPayment.status !== "captured") {
-      payment.razorpayPaymentId = razorpay_payment_id;
-      payment.razorpaySignature = razorpay_signature;
-      payment.paymentStatus = "pending";
-      await payment.save();
-
-      return res.status(200).json({
+      return res.status(409).json({
         success: false,
-        message: "Payment is not captured yet.",
-        paymentStatus: razorpayPayment.status,
+        message: `Payment is not captured. Current status: ${razorpayPayment.status}`,
       });
     }
-
-    const method = getPaymentMethod(razorpayPayment.method);
 
     payment.razorpayPaymentId = razorpay_payment_id;
     payment.razorpaySignature = razorpay_signature;
     payment.transactionId = razorpay_payment_id;
-    payment.paymentMethod = method;
+    payment.paymentMethod = getPaymentMethod(razorpayPayment.method);
     payment.paymentStatus = "success";
     payment.paymentDate = new Date();
 
     await payment.save();
 
-    // Update only the corresponding booking
-    await Booking.findOneAndUpdate(
+    const booking = await Booking.findOneAndUpdate(
       {
         _id: payment.bookingId,
         userId,
@@ -256,29 +240,36 @@ export const verifyPayment = async (req, res) => {
           paymentStatus: "Paid",
           status: "Confirmed",
         },
-      }
+      },
+      { new: true }
     );
 
-    return res.status(200).json({
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Payment verified, but booking was not found",
+      });
+    }
+
+    return res.json({
       success: true,
-      message: "Payment verified successfully.",
+      message: "Payment verified successfully",
       payment,
+      booking,
     });
   } catch (error) {
-    console.error("VERIFY PAYMENT ERROR:", error);
+    console.error("Verify payment error:", error);
 
     return res.status(500).json({
       success: false,
-      message: "Payment verification failed.",
-      error: error.message,
+      message: error.message || "Payment verification failed",
     });
   }
 };
 
-// --------------------------------------------------
-// USER PAYMENT HISTORY
-// GET /api/payments/my-payments
-// --------------------------------------------------
+// ========================================
+// GET LOGGED-IN USER PAYMENTS
+// ========================================
 
 export const getMyPayments = async (req, res) => {
   try {
@@ -287,92 +278,60 @@ export const getMyPayments = async (req, res) => {
     if (!userId) {
       return res.status(401).json({
         success: false,
-        message: "Please login first.",
+        message: "Please login first",
       });
     }
 
     const payments = await Payment.find({ userId })
-      .sort({ createdAt: -1 })
-      .lean();
+      .populate("bookingId")
+      .sort({ createdAt: -1 });
 
-    return res.status(200).json({
+    return res.json({
       success: true,
-      total: payments.length,
+      count: payments.length,
       payments,
     });
   } catch (error) {
-    console.error("MY PAYMENTS ERROR:", error);
+    console.error("Get my payments error:", error);
 
     return res.status(500).json({
       success: false,
-      message: "Unable to fetch payment history.",
+      message: error.message,
     });
   }
 };
 
-// --------------------------------------------------
-// ADMIN PAYMENT TRANSACTIONS
-// GET /api/payments/all
-// --------------------------------------------------
+// ========================================
+// ADMIN: GET ALL PAYMENTS
+// ========================================
 
 export const getAllPayments = async (req, res) => {
   try {
-    const payments = await Payment.find({})
-      .populate("userId", "name email")
+    const payments = await Payment.find()
       .populate("bookingId")
-      .sort({ createdAt: -1 })
-      .lean();
+      .sort({ createdAt: -1 });
 
-    const [
-      totalTransactions,
-      successfulPayments,
-      pendingPayments,
-      failedPayments,
-      refundedPayments,
-      revenueResult,
-    ] = await Promise.all([
-      Payment.countDocuments({}),
-      Payment.countDocuments({ paymentStatus: "success" }),
-      Payment.countDocuments({ paymentStatus: "pending" }),
-      Payment.countDocuments({ paymentStatus: "failed" }),
-      Payment.countDocuments({ paymentStatus: "refunded" }),
+    const totalRevenue = payments
+      .filter((p) => p.paymentStatus === "success")
+      .reduce((sum, p) => sum + Number(p.amount || 0), 0);
 
-      Payment.aggregate([
-        {
-          $match: {
-            paymentStatus: "success",
-          },
-        },
-        {
-          $group: {
-            _id: null,
-            totalRevenue: {
-              $sum: "$amount",
-            },
-          },
-        },
-      ]),
-    ]);
+    const totalPending = payments.filter(
+      (p) => p.paymentStatus === "pending"
+    ).length;
 
-    return res.status(200).json({
+    return res.json({
       success: true,
+      count: payments.length,
+      totalRevenue,
+      totalPending,
       payments,
-      statistics: {
-        totalTransactions,
-        successfulPayments,
-        pendingPayments,
-        failedPayments,
-        refundedPayments,
-        totalRevenue: revenueResult[0]?.totalRevenue || 0,
-        currency: "INR",
-      },
     });
   } catch (error) {
-    console.error("ALL PAYMENTS ERROR:", error);
+    console.error("Get all payments error:", error);
 
     return res.status(500).json({
       success: false,
-      message: "Unable to fetch transactions.",
+      message: error.message,
     });
   }
 };
