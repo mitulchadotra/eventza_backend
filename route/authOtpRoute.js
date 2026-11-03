@@ -9,10 +9,10 @@ import {
 
 const router = express.Router();
 
-router.post("/login", startLoginOtp);
+router.post("/auth/login", startLoginOtp);
 
-router.post("/verify-login-otp", verifyLoginOtp);
-
-router.post("/resend-login-otp", resendLoginOtp);
+// OTP endpoints are retained but disabled
+router.post("/auth/verify-login-otp", verifyLoginOtp);
+router.post("/auth/resend-login-otp", resendLoginOtp);
 
 export default router;
