@@ -84,6 +84,8 @@ export const startLoginOtp = async (req, res) => {
       });
     }
 
+    const registeredEmail = normalizeEmail(user.email);
+
     const passwordMatched = await bcrypt.compare(
       password,
       user.password
@@ -118,7 +120,7 @@ export const startLoginOtp = async (req, res) => {
       user.lastLoginAt = new Date();
       await user.save();
 
-      await LoginOtp.deleteOne({ email });
+      await LoginOtp.deleteOne({ email: registeredEmail });
 
       return res.status(200).json({
         status: 1,
@@ -130,7 +132,9 @@ export const startLoginOtp = async (req, res) => {
       });
     }
 
-    const existingOtp = await LoginOtp.findOne({ email });
+    const existingOtp = await LoginOtp.findOne({
+      email: registeredEmail,
+    });
 
     // Prevent repeated OTP requests within 30 seconds.
     if (
@@ -145,12 +149,12 @@ export const startLoginOtp = async (req, res) => {
 
     const otp = generateOtp();
 
-    const otpHash = hashOtp(email, otp);
+    const otpHash = hashOtp(registeredEmail, otp);
 
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
     await LoginOtp.findOneAndUpdate(
-      { email },
+      { email: registeredEmail },
       {
         $set: {
           userId: user._id,
@@ -162,7 +166,7 @@ export const startLoginOtp = async (req, res) => {
           resendCount: 0,
         },
         $setOnInsert: {
-          email,
+          email: registeredEmail,
         },
       },
       {
@@ -173,9 +177,9 @@ export const startLoginOtp = async (req, res) => {
     );
 
     try {
-      await sendLoginOtp(email, otp);
+      await sendLoginOtp(registeredEmail, otp);
     } catch (mailError) {
-      await LoginOtp.deleteOne({ email });
+      await LoginOtp.deleteOne({ email: registeredEmail });
       throw mailError;
     }
 
@@ -184,14 +188,14 @@ export const startLoginOtp = async (req, res) => {
       success: true,
       requiresOtp: true,
       message: "OTP sent successfully to your registered email",
-      email,
+      email: registeredEmail,
       role: userRole,
     });
 
   } catch (error) {
     console.error("Start login OTP error:", error);
 
-    return res.status(500).json({
+    return res.status(error.status || 500).json({
       status: 0,
       message: error.message || "Unable to send login OTP",
     });
@@ -276,6 +280,15 @@ export const verifyLoginOtp = async (req, res) => {
       return res.status(404).json({
         status: 0,
         message: "User account not found",
+      });
+    }
+
+    if (normalizeEmail(user.email) !== email) {
+      await LoginOtp.deleteOne({ email });
+
+      return res.status(400).json({
+        status: 0,
+        message: "The login email no longer matches the registered account. Please login again.",
       });
     }
 
@@ -374,9 +387,20 @@ export const resendLoginOtp = async (req, res) => {
       });
     }
 
+    const registeredEmail = normalizeEmail(user.email);
+
+    if (registeredEmail !== email) {
+      await LoginOtp.deleteOne({ email });
+
+      return res.status(400).json({
+        status: 0,
+        message: "Login email does not match the registered account. Please login again.",
+      });
+    }
+
     const otp = generateOtp();
 
-    otpRecord.otpHash = hashOtp(email, otp);
+    otpRecord.otpHash = hashOtp(registeredEmail, otp);
     otpRecord.expiresAt = new Date(Date.now() + 5 * 60 * 1000);
     otpRecord.attempts = 0;
     otpRecord.lastSentAt = new Date();
@@ -385,7 +409,7 @@ export const resendLoginOtp = async (req, res) => {
     await otpRecord.save();
 
     try {
-      await sendLoginOtp(email, otp);
+      await sendLoginOtp(registeredEmail, otp);
     } catch (mailError) {
       await LoginOtp.deleteOne({ email });
       throw mailError;
@@ -400,7 +424,7 @@ export const resendLoginOtp = async (req, res) => {
   } catch (error) {
     console.error("Resend login OTP error:", error);
 
-    return res.status(500).json({
+    return res.status(error.status || 500).json({
       status: 0,
       message: error.message || "Unable to resend OTP",
     });

@@ -23,11 +23,9 @@ const app = express();
 // ================= CORS CONFIGURATION =================
 
 const allowedOrigins = [
-  // Existing Vercel deployments
   "https://eventzaa-b4xshhsf2-mitul13.vercel.app",
   "https://eventzaa-nine.vercel.app",
 
-  // Local development
   "http://localhost:5173",
   "http://localhost:3000",
   "http://localhost:3001",
@@ -35,27 +33,22 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow requests without an Origin header (e.g. server-to-server).
     if (!origin) {
       return callback(null, true);
     }
 
-    // Allow explicitly listed origins.
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
 
-    // Allow this project's Vercel preview deployments only.
+    // Allow this project's Vercel preview deployments.
     try {
       const hostname = new URL(origin).hostname;
 
       const isEventzaaVercelPreview =
         /^eventzaa-[a-z0-9-]+-mitul13\.vercel\.app$/.test(hostname);
 
-      if (
-        origin.startsWith("https://") &&
-        isEventzaaVercelPreview
-      ) {
+      if (origin.startsWith("https://") && isEventzaaVercelPreview) {
         return callback(null, true);
       }
     } catch (error) {
@@ -84,7 +77,6 @@ const corsOptions = {
   optionsSuccessStatus: 204,
 };
 
-// Apply CORS before routes and other middleware.
 app.use(cors(corsOptions));
 
 // ================= BODY PARSER =================
@@ -188,28 +180,20 @@ const startServer = async () => {
 
     // Gmail connection test should not stop the server.
     testGmailConnection().catch((error) => {
-      console.error(
-        "Gmail SMTP is not ready:",
-        error.message
-      );
+      console.error("Gmail SMTP is not ready:", error.message);
     });
 
     app.listen(PORT, "0.0.0.0", () => {
       console.log(`Eventzaa backend running on port ${PORT}`);
       console.log("Authentication API: /api/auth");
-      console.log("Login API: /api/auth/login");
-      console.log("OTP verification: /api/auth/verify-login-otp");
       console.log("Bookings API: /api/bookings");
       console.log("Payments API: /api/payments");
       console.log("User Chatbot API: /api/ai/user-chat");
       console.log("Admin Chatbot API: /api/ai/admin-chat");
     });
-  } catch (error) {
-    console.error(
-      "Failed to start backend:",
-      error.message
-    );
 
+  } catch (error) {
+    console.error("Failed to start backend:", error.message);
     process.exit(1);
   }
 };

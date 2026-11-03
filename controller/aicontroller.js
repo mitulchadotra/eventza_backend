@@ -1,391 +1,317 @@
 
+import "dotenv/config";
+import { GoogleGenAI } from "@google/genai";
+
 import Event from "../model/event.js";
 import Booking from "../model/booking.js";
 import Payment from "../model/payment.js";
 import User from "../model/user.js";
 
-// ---------------------------------------------
+// ==================================================
+// GEMINI CONFIGURATION
+// ==================================================
+
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+
+const getGemini = () => {
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY is missing in backend environment variables.");
+  }
+
+  return new GoogleGenAI({ apiKey });
+};
+
+// ==================================================
 // COMMON HELPERS
-// ---------------------------------------------
+// ==================================================
 
 const getUserId = (req) => {
-  return req.user?._id || req.user?.id || req.user?.userId || null;
+  return req.user?.id || req.user?._id || req.user?.userId;
 };
 
-const getMessage = (req) => {
-  const message = req.body?.message;
+const safeJSON = (data) => {
+  return JSON.parse(
+    JSON.stringify(data, (key, value) => {
+      if (
+        key === "password" ||
+        key === "__v" ||
+        key === "token" ||
+        key === "resetToken"
+      ) {
+        return undefined;
+      }
 
-  if (
-    typeof message !== "string" ||
-    !message.trim() ||
-    message.length > 2000
-  ) {
-    return null;
-  }
-
-  return message.trim();
+      return value;
+    })
+  );
 };
-
-const detectLanguage = (message) => {
-  if (/[\u0A80-\u0AFF]/.test(message)) return "gu";
-  if (/[\u0900-\u097F]/.test(message)) return "hi";
-  return "en";
-};
-
-const getText = (language, english, hindi, gujarati) => {
-  if (language === "hi") return hindi;
-  if (language === "gu") return gujarati;
-  return english;
-};
-
-const formatMoney = (amount) => {
-  return `₹${Number(amount || 0).toLocaleString("en-IN")}`;
-};
-
-const formatDate = (date) => {
-  if (!date) return "Date not available";
-
-  const parsed = new Date(date);
-
-  if (Number.isNaN(parsed.getTime())) {
-    return "Date not available";
-  }
-
-  return parsed.toLocaleDateString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
-};
-
-// ---------------------------------------------
-// INDIA TODAY DATE RANGE
-// ---------------------------------------------
 
 const getIndiaDayRange = () => {
-  const parts = new Intl.DateTimeFormat("en-CA", {
+  const now = new Date();
+
+  const indiaDate = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).formatToParts(new Date());
+  }).format(now);
 
-  const values = {};
+  const start = new Date(`${indiaDate}T00:00:00+05:30`);
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
 
-  parts.forEach((part) => {
-    values[part.type] = part.value;
-  });
-
-  const startUTC =
-    Date.UTC(
-      Number(values.year),
-      Number(values.month) - 1,
-      Number(values.day)
-    ) -
-    5.5 * 60 * 60 * 1000;
-
-  return {
-    start: new Date(startUTC),
-    end: new Date(startUTC + 24 * 60 * 60 * 1000),
-  };
+  return { start, end };
 };
 
-// ---------------------------------------------
+// ==================================================
+// GEMINI AI RESPONSE FUNCTION
+// ==================================================
+
+const getAIAnswer = async (message, history = [], context = "") => {
+  const ai = getGemini();
+
+  const previousMessages = Array.isArray(history)
+    ? history
+        .slice(-10)
+        .filter((item) => {
+          const content = String(
+            item.content || item.message || ""
+          ).trim();
+
+          // Ignore old fixed help-menu responses.
+          return (
+            content &&
+            !content.includes("I can help you with:") &&
+            !content.includes("Try asking: How many users logged in today?")
+          );
+        })
+        .map((item) => ({
+          role:
+            item.role === "assistant" || item.role === "model"
+              ? "model"
+              : "user",
+          parts: [
+            {
+              text: String(
+                item.content || item.message || ""
+              ).slice(0, 3000),
+            },
+          ],
+        }))
+    : [];
+
+  const prompt = `
+You are Eventzaa AI Assistant.
+
+ABOUT EVENTZAA:
+
+Eventzaa is an event management platform.
+
+The platform allows users to:
+- Explore available events.
+- View event names and descriptions.
+- Check event dates and locations.
+- Check event ticket prices.
+- Register and create an account.
+- Login to their account.
+- Book tickets for events.
+- View their own booking details.
+- Check their booking status.
+- Check their payment status.
+- View and manage their profile.
+
+YOUR MAIN JOB:
+
+Answer questions about Eventzaa intelligently.
+
+Users can ask ANY question related to Eventzaa.
+Do not restrict answers to a fixed list of questions.
+
+For example, answer questions about:
+- What is Eventzaa?
+- How does Eventzaa work?
+- How can I register?
+- How can I login?
+- How can I book an event?
+- How can I find an event?
+- How can I check event prices?
+- How can I check my booking?
+- How can I check payment status?
+- What features does Eventzaa provide?
+- What is the purpose of Eventzaa?
+- How do I use the Eventzaa platform?
+
+IMPORTANT INSTRUCTIONS:
+
+1. Never display a fixed help menu.
+2. Never say "I can help you with:".
+3. Never ask the user to select from a predefined list.
+4. Understand the complete question before answering.
+5. Answer general knowledge questions too.
+6. Answer in the same language as the user.
+7. Supported languages: English, Hindi and Gujarati.
+8. Give step-by-step instructions when required.
+9. Use the supplied database information for actual event details.
+10. Never invent event dates, prices, locations or booking records.
+11. For normal-user chats, only discuss the authenticated user's own bookings.
+12. Never reveal other users' personal information in normal-user chats. Admin chats may report user profile details supplied in the admin database context.
+13. Never reveal passwords, API keys or authentication tokens.
+14. Do not expose admin-only statistics to normal users.
+15. If a requested feature is not confirmed by the supplied information, do not claim that it exists.
+16. If database information is unavailable, explain that clearly.
+17. Keep the answer friendly, useful and direct.
+18. Do not repeat the same fixed response for different questions.
+
+EVENTZAA DATABASE INFORMATION:
+
+${context || "No additional database information is available."}
+
+USER QUESTION:
+
+${message}
+`;
+
+  const result = await ai.models.generateContent({
+    model: GEMINI_MODEL,
+    contents: [
+      ...previousMessages,
+      {
+        role: "user",
+        parts: [{ text: prompt }],
+      },
+    ],
+  });
+
+  const answer = result.text?.trim();
+
+  if (!answer) {
+    return "Sorry, I could not generate an answer. Please try again.";
+  }
+
+  return answer;
+};
+
+// ==================================================
 // USER CHATBOT
-// POST /api/ai/user-chat
-// ---------------------------------------------
+// ==================================================
 
 export const userChat = async (req, res) => {
   try {
     const userId = getUserId(req);
-    const message = getMessage(req);
+    const { message, history = [] } = req.body;
 
     if (!userId) {
       return res.status(401).json({
         success: false,
-        message: "Please login first.",
+        message: "Please login to use the chatbot.",
       });
     }
 
-    if (!message) {
+    if (!message || !String(message).trim()) {
       return res.status(400).json({
         success: false,
-        message: "Please enter a valid message.",
+        message: "Please enter a message.",
       });
     }
 
-    const language = detectLanguage(message);
-    const question = message.toLowerCase().trim();
-
-    const { start, end } = getIndiaDayRange();
-
-    // -----------------------------------------
-    // 1. USERS WHO LOGGED IN TODAY
-    // -----------------------------------------
-
-    if (
-      /(?=.*\b(?:how many|number of|count|total)\b)(?=.*\busers?\b)(?=.*\b(?:login|log\s*in|logged\s*in|sign\s*in|signin)\b)(?=.*\btoday\b)/i.test(question) ||
-      /\btoday'?s?\s+(?:user\s+)?logins?\b/i.test(question) ||
-      /(आज कितने यूजर.*लॉगिन|आज कितने उपयोगकर्ता.*लॉगिन|આજે કેટલા યુઝર.*લોગિન|આજે કેટલા વપરાશકર્તા.*લોગિન)/i.test(question)
-    ) {
-      const todayLoginCount = await User.countDocuments({
-        role: "user",
-        lastLoginAt: {
-          $gte: start,
-          $lt: end,
-        },
-      });
-
-      return res.status(200).json({
-        success: true,
-        role: "user",
-        reply: getText(
-          language,
-          `Today ${todayLoginCount} users logged in to Eventzaa.`,
-          `आज Eventzaa में ${todayLoginCount} यूजर्स ने लॉगिन किया।`,
-          `આજે Eventzaa માં ${todayLoginCount} યુઝર્સે લોગિન કર્યું.`
-        ),
-        data: {
-          todayLoginCount,
-        },
-      });
-    }
-
-    // -----------------------------------------
-    // 2. USERS REGISTERED TODAY
-    // -----------------------------------------
-
-    if (
-      /\bhow many users? (?:are )?registered today\b/i.test(question) ||
-      /\bhow many registered users? today\b/i.test(question) ||
-      /\busers? registered today\b/i.test(question)
-    ) {
-      const registeredToday = await User.countDocuments({
-        role: "user",
-        createdAt: {
-          $gte: start,
-          $lt: end,
-        },
-      });
-
-      return res.status(200).json({
-        success: true,
-        role: "user",
-        reply: `Today ${registeredToday} new users registered in Eventzaa.`,
-        data: {
-          registeredToday,
-        },
-      });
-    }
-
-    // -----------------------------------------
-    // 3. TOTAL REGISTERED USERS
-    // -----------------------------------------
-
-    if (
-      /\bhow many users? (?:are )?registered\b/i.test(question) ||
-      /\bhow many registered users?\b/i.test(question) ||
-      /\btotal registered users?\b/i.test(question) ||
-      /\bregistered users? count\b/i.test(question) ||
-      /\bnumber of registered users?\b/i.test(question) ||
-      /\btotal users?\b/i.test(question) ||
-      /\busers? count\b/i.test(question) ||
-      /(કુલ યુઝર|કેટલા યુઝર|કુલ વપરાશકર્તા|कुल यूजर|कितने यूजर)/i.test(question)
-    ) {
-      const totalUsers = await User.countDocuments({
-        role: "user",
-      });
-
-      return res.status(200).json({
-        success: true,
-        role: "user",
-        reply: getText(
-          language,
-          `Total registered users in Eventzaa: ${totalUsers}.`,
-          `Eventzaa में कुल रजिस्टर्ड यूजर्स: ${totalUsers}.`,
-          `Eventzaa માં કુલ રજિસ્ટર્ડ યુઝર્સ: ${totalUsers}.`
-        ),
-        data: {
-          totalRegisteredUsers: totalUsers,
-        },
-      });
-    }
-
-    // -----------------------------------------
-    // FETCH PUBLISHED EVENTS
-    // -----------------------------------------
-
+    // Fetch published events.
     const events = await Event.find({
       status: { $regex: /^published$/i },
     })
-      .select("title description date location category price status")
+      .select("title name description category location date price status")
       .sort({ date: 1 })
-      .limit(30)
+      .limit(100)
       .lean();
 
-    // -----------------------------------------
-    // FETCH ONLY LOGGED-IN USER BOOKINGS
-    // -----------------------------------------
-
+    // Fetch only the authenticated user's bookings.
     const bookings = await Booking.find({ userId })
-      .select(
-        "bookingId eventTitle date location quantity price totalAmount status paymentStatus createdAt"
-      )
       .sort({ createdAt: -1 })
-      .limit(20)
+      .limit(100)
       .lean();
 
-    let reply = "";
+    const eventDetails = events.map((event) => ({
+      eventId: event._id,
+      title: event.title || event.name || "Not specified",
+      description: event.description || "Not specified",
+      category: event.category || "Not specified",
+      location: event.location || "Not specified",
+      date: event.date || "Not specified",
+      price: event.price ?? "Not specified",
+      status: event.status || "Not specified",
+    }));
 
-    // -----------------------------------------
-    // 4. GREETING
-    // -----------------------------------------
+    const bookingDetails = bookings.map((booking) => ({
+      bookingId: booking._id,
+      event:
+        booking.eventName ||
+        booking.eventTitle ||
+        booking.eventId ||
+        "Event name not stored",
+      quantity: booking.quantity || booking.tickets || 1,
+      amount:
+        booking.totalAmount ??
+        booking.amount ??
+        booking.price ??
+        null,
+      bookingStatus:
+        booking.status ||
+        booking.bookingStatus ||
+        "Not specified",
+      paymentStatus:
+        booking.paymentStatus ||
+        "Not specified",
+      bookingDate: booking.createdAt || null,
+    }));
 
-    if (
-      /^(hi|hello|hey|hii|namaste|નમસ્તે|કેમ છો)/i.test(question)
-    ) {
-      reply = getText(
-        language,
-        "Hello! Welcome to Eventzaa. I can help you with events, event prices and your bookings.",
-        "नमस्ते! Eventzaa में आपका स्वागत है। मैं आपको इवेंट और आपकी बुकिंग की जानकारी दे सकता हूँ।",
-        "નમસ્તે! Eventzaa માં તમારું સ્વાગત છે. હું તમને ઇવેન્ટ અને તમારી બુકિંગની માહિતી આપી શકું છું."
-      );
-    }
+    const context = `
+EVENTZAA PLATFORM INFORMATION:
 
-    // -----------------------------------------
-    // 5. MY BOOKINGS
-    // -----------------------------------------
+Eventzaa is an event management platform.
+Users can explore events, register, login, book tickets and view their own bookings.
 
-    else if (
-      /(my booking|my bookings|show booking|show my booking|booking details|booking status|મારી બુકિંગ|બુકિંગ બતાવો|मेरी बुकिंग|बुकिंग दिखाओ)/i.test(question)
-    ) {
-      if (bookings.length === 0) {
-        reply = getText(
-          language,
-          "You don't have any bookings yet.",
-          "आपकी अभी कोई बुकिंग नहीं है।",
-          "તમારી હજુ સુધી કોઈ બુકિંગ નથી."
-        );
-      } else {
-        reply = `You have ${bookings.length} recent booking(s):`;
+AVAILABLE PUBLISHED EVENTS:
 
-        bookings.forEach((booking, index) => {
-          reply +=
-            `\n\n${index + 1}. ${booking.eventTitle || "Event"}` +
-            `\nBooking ID: ${booking.bookingId || booking._id}` +
-            `\nDate: ${formatDate(booking.date)}` +
-            `\nQuantity: ${booking.quantity || 1}` +
-            `\nAmount: ${formatMoney(booking.totalAmount ?? booking.price)}` +
-            `\nBooking Status: ${booking.status || "Pending"}` +
-            `\nPayment Status: ${booking.paymentStatus || "Pending"}`;
-        });
-      }
-    }
+${JSON.stringify(safeJSON(eventDetails), null, 2)}
 
-    // -----------------------------------------
-    // 6. BOOKING COUNT
-    // -----------------------------------------
+AUTHENTICATED USER'S BOOKING DETAILS:
 
-    else if (
-      /(how many bookings|how many booking|total bookings|total booking|booking count)/i.test(question)
-    ) {
-      reply = `You have ${bookings.length} recent booking(s).`;
-    }
+${JSON.stringify(safeJSON(bookingDetails), null, 2)}
 
-    // -----------------------------------------
-    // 7. PAYMENT STATUS
-    // -----------------------------------------
+TOTAL AVAILABLE PUBLISHED EVENTS: ${events.length}
 
-    else if (
-      /(payment status|my payment|payment details|पेमेंट स्टेटस|मेरा पेमेंट|પેમેન્ટ સ્ટેટસ)/i.test(question)
-    ) {
-      if (bookings.length === 0) {
-        reply = "You don't have any booking or payment records yet.";
-      } else {
-        reply = "Your booking payment details:";
+TOTAL BOOKINGS OF AUTHENTICATED USER: ${bookings.length}
 
-        bookings.forEach((booking, index) => {
-          reply +=
-            `\n\n${index + 1}. ${booking.eventTitle || "Event"}` +
-            `\nBooking ID: ${booking.bookingId || booking._id}` +
-            `\nAmount: ${formatMoney(booking.totalAmount ?? booking.price)}` +
-            `\nPayment Status: ${booking.paymentStatus || "Pending"}`;
-        });
-      }
-    }
+IMPORTANT DATABASE RULES:
 
-    // -----------------------------------------
-    // 8. EVENT PRICE
-    // -----------------------------------------
+- The event records above are actual published events from the database.
+- The booking records above belong only to the authenticated user.
+- If asked how many events are available, use the published event count.
+- If asked how many bookings the user has, use the booking count.
+- If asked which events the user booked, list the event names from their bookings.
+- If asked about booking status, use bookingStatus.
+- If asked about payment status, use paymentStatus.
+- Never confuse booking status with payment status.
+- Never show another user's bookings.
+- Never expose admin statistics.
+- If an event or booking field is missing, say it is not available.
+`;
 
-    else if (
-      /(event price|event prices|price of event|event cost|इवेंट की कीमत|इवेंट प्राइस|ઇવેન્ટની કિંમત|ઇવેન્ટ પ્રાઇસ)/i.test(question)
-    ) {
-      if (events.length === 0) {
-        reply = "Currently no published events are available.";
-      } else {
-        reply = "Available event prices:";
-
-        events.forEach((event, index) => {
-          reply +=
-            `\n\n${index + 1}. ${event.title}` +
-            `\nPrice: ${formatMoney(event.price)}` +
-            `\nDate: ${formatDate(event.date)}`;
-        });
-      }
-    }
-
-    // -----------------------------------------
-    // 9. AVAILABLE EVENTS
-    // -----------------------------------------
-
-    else if (
-      /(event|events|upcoming|available|show event|event list|इवेंट|कार्यक्रम|ઇવેન્ટ|કાર્યક્રમ)/i.test(question)
-    ) {
-      if (events.length === 0) {
-        reply = "Currently, no published events are available.";
-      } else {
-        reply = `Here are ${events.length} available Eventzaa events:`;
-
-        events.forEach((event, index) => {
-          reply +=
-            `\n\n${index + 1}. ${event.title}` +
-            `\nCategory: ${event.category || "N/A"}` +
-            `\nDate: ${formatDate(event.date)}` +
-            `\nLocation: ${event.location || "N/A"}` +
-            `\nPrice: ${formatMoney(event.price)}`;
-        });
-      }
-    }
-
-    // -----------------------------------------
-    // 10. HELP
-    // -----------------------------------------
-
-    else {
-      reply = getText(
-        language,
-        "I can help you with:\n1. Available events\n2. Event prices and dates\n3. Your bookings\n4. Your booking and payment status\n5. Total registered users\n6. Users who logged in today\n\nTry asking: How many users logged in today?",
-        "मैं आपकी मदद इन विषयों में कर सकता हूँ:\n1. उपलब्ध इवेंट\n2. इवेंट की कीमत और तारीख\n3. आपकी बुकिंग\n4. बुकिंग और पेमेंट स्टेटस\n5. कुल रजिस्टर्ड यूजर्स\n6. आज लॉगिन करने वाले यूजर्स\n\nपूछें: आज कितने यूजर्स ने लॉगिन किया?",
-        "હું તમને આ બાબતોમાં મદદ કરી શકું છું:\n1. ઉપલબ્ધ ઇવેન્ટ\n2. ઇવેન્ટની કિંમત અને તારીખ\n3. તમારી બુકિંગ\n4. બુકિંગ અને પેમેન્ટ સ્ટેટસ\n5. કુલ રજિસ્ટર્ડ યુઝર્સ\n6. આજે લોગિન કરનારા યુઝર્સ\n\nપૂછો: આજે કેટલા યુઝર્સે લોગિન કર્યું?"
-      );
-    }
+    const answer = await getAIAnswer(message, history, context);
 
     return res.status(200).json({
       success: true,
-      role: "user",
-      reply,
-      data: {
-        totalAvailableEvents: events.length,
-        totalMyBookings: bookings.length,
-      },
+      answer,
+      reply: answer,
+      bookingCount: bookings.length,
+      eventCount: events.length,
     });
   } catch (error) {
     console.error("User chatbot error:", error);
 
     return res.status(500).json({
       success: false,
-      message: "User chatbot failed.",
+      message: "Chatbot error. Please try again later.",
       error:
         process.env.NODE_ENV === "development"
           ? error.message
@@ -394,188 +320,235 @@ export const userChat = async (req, res) => {
   }
 };
 
-// ---------------------------------------------
+// ==================================================
 // ADMIN CHATBOT
-// POST /api/ai/admin-chat
-// ---------------------------------------------
+// ==================================================
 
 export const adminChat = async (req, res) => {
   try {
-    const message = getMessage(req);
+    const { message, history = [] } = req.body;
 
-    if (!message) {
+    if (!message || !String(message).trim()) {
       return res.status(400).json({
         success: false,
-        message: "Please enter a valid message.",
+        message: "Please enter a message.",
       });
     }
 
-    const language = detectLanguage(message);
-    const question = message.toLowerCase().trim();
+    // Admin role verification.
+    if (req.user?.role !== "admin") {
+      return res.status(403).json({
+        success: false,
+        message: "Admin access required.",
+      });
+    }
 
     const { start, end } = getIndiaDayRange();
 
     const [
       totalUsers,
       totalEvents,
-      publishedEvents,
       totalBookings,
       totalPayments,
-      successfulPayments,
-      pendingPayments,
-      failedPayments,
-      refundedPayments,
-      todayLogins,
-      revenueResult,
+      publishedEvents,
+      todayRegistrations,
+      todayUsers,
+      userRecords,
+      paymentRecords,
+      bookingRecords,
     ] = await Promise.all([
-      User.countDocuments({ role: "user" }),
+      User.countDocuments(),
 
-      Event.countDocuments({}),
+      Event.countDocuments(),
+
+      Booking.countDocuments(),
+
+      Payment.countDocuments(),
 
       Event.countDocuments({
         status: { $regex: /^published$/i },
       }),
 
-      Booking.countDocuments({}),
-
-      Payment.countDocuments({}),
-
-      Payment.countDocuments({
-        paymentStatus: { $regex: /^success(ful)?$/i },
-      }),
-
-      Payment.countDocuments({
-        paymentStatus: { $regex: /^pending$/i },
-      }),
-
-      Payment.countDocuments({
-        paymentStatus: { $regex: /^failed$/i },
-      }),
-
-      Payment.countDocuments({
-        paymentStatus: { $regex: /^refunded$/i },
+      User.countDocuments({
+        createdAt: { $gte: start, $lt: end },
       }),
 
       User.countDocuments({
-        role: "user",
-        lastLoginAt: {
-          $gte: start,
-          $lt: end,
-        },
+        lastLoginAt: { $gte: start, $lt: end },
       }),
 
-      Payment.aggregate([
-        {
-          $match: {
-            paymentStatus: {
-              $regex: /^success(ful)?$/i,
-            },
-          },
-        },
-        {
-          $group: {
-            _id: null,
-            totalRevenue: {
-              $sum: "$amount",
-            },
-          },
-        },
-      ]),
+      User.find({ role: "user" })
+        .select("name email phone address createdAt")
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .lean(),
+
+      Payment.find({})
+        .select("amount totalAmount status paymentStatus createdAt")
+        .limit(1000)
+        .lean(),
+
+      Booking.find({})
+        .select(
+          "eventName eventTitle eventId quantity tickets totalAmount amount price status bookingStatus paymentStatus createdAt"
+        )
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .lean(),
     ]);
 
-    const totalRevenue = revenueResult[0]?.totalRevenue || 0;
+    const normalizeStatus = (record) =>
+      String(
+        record.status || record.paymentStatus || ""
+      ).toLowerCase();
 
-    const databaseData = {
-      totalUsers,
-      totalEvents,
-      publishedEvents,
-      totalBookings,
-      totalPayments,
-      successfulPayments,
-      pendingPayments,
-      failedPayments,
-      refundedPayments,
-      todayLogins,
-      totalRevenue,
-      currency: "INR",
-    };
+    const successfulPayments = paymentRecords.filter((payment) =>
+      [
+        "success",
+        "successful",
+        "paid",
+        "completed",
+        "captured",
+      ].includes(normalizeStatus(payment))
+    );
 
-    let reply = "";
+    const pendingPayments = paymentRecords.filter((payment) =>
+      ["pending", "created", "processing"].includes(
+        normalizeStatus(payment)
+      )
+    );
 
-    // TODAY LOGIN COUNT
-    if (
-      /(?=.*\b(?:how many|number of|count|total)\b)(?=.*\busers?\b)(?=.*\b(?:login|log\s*in|logged\s*in|sign\s*in|signin)\b)(?=.*\btoday\b)/i.test(question) ||
-      /\btoday'?s?\s+(?:user\s+)?logins?\b/i.test(question)
-    ) {
-      reply = `Today ${todayLogins} unique users logged in to Eventzaa.`;
-    }
+    const failedPayments = paymentRecords.filter((payment) =>
+      ["failed", "failure"].includes(normalizeStatus(payment))
+    );
 
-    // TOTAL REGISTERED USERS
-    else if (
-      /\b(?:total|how\s+many|count)\s+(?:registered\s+)?users?\b/i.test(question) ||
-      /\bhow\s+many\s+users?\s+(?:are\s+)?registered\b/i.test(question) ||
-      /\bnumber\s+of\s+registered\s+users?\b/i.test(question)
-    ) {
-      reply = `Total registered users: ${totalUsers}.`;
-    }
+    const refundedPayments = paymentRecords.filter((payment) =>
+      ["refunded", "refund"].includes(normalizeStatus(payment))
+    );
 
-    // TOTAL EVENTS
-    else if (
-      /(total events|how many events|event count)/i.test(question)
-    ) {
-      reply =
-        `Total events: ${totalEvents}.\n` +
-        `Published events: ${publishedEvents}.`;
-    }
+    const totalRevenue = successfulPayments.reduce(
+      (sum, payment) => {
+        const amount = Number(
+          payment.totalAmount ?? payment.amount ?? 0
+        );
 
-    // TOTAL BOOKINGS
-    else if (
-      /(total bookings|how many bookings|how many booking|booking count)/i.test(question)
-    ) {
-      reply = `Total bookings: ${totalBookings}.`;
-    }
+        return sum + (
+          Number.isFinite(amount) ? amount : 0
+        );
+      },
+      0
+    );
 
-    // PAYMENT / REVENUE
-    else if (
-      /(revenue|total payment|total payments|transaction)/i.test(question)
-    ) {
-      reply =
-        `Total transactions: ${totalPayments}\n` +
-        `Successful payments: ${successfulPayments}\n` +
-        `Pending payments: ${pendingPayments}\n` +
-        `Failed payments: ${failedPayments}\n` +
-        `Refunded payments: ${refundedPayments}\n` +
-        `Total revenue: ${formatMoney(totalRevenue)}`;
-    }
+    const recentBookings = bookingRecords.map((booking) => ({
+      bookingId: booking._id,
+      event:
+        booking.eventName ||
+        booking.eventTitle ||
+        booking.eventId ||
+        "Not specified",
+      quantity: booking.quantity || booking.tickets || 1,
+      amount:
+        booking.totalAmount ??
+        booking.amount ??
+        booking.price ??
+        null,
+      bookingStatus:
+        booking.status ||
+        booking.bookingStatus ||
+        "Not specified",
+      paymentStatus:
+        booking.paymentStatus ||
+        "Not specified",
+      date: booking.createdAt || null,
+    }));
 
-    // ALL STATISTICS
-    else {
-      reply =
-        `Eventzaa Database Statistics:\n\n` +
-        `Total Users: ${totalUsers}\n` +
-        `Total Events: ${totalEvents}\n` +
-        `Published Events: ${publishedEvents}\n` +
-        `Total Bookings: ${totalBookings}\n` +
-        `Total Transactions: ${totalPayments}\n` +
-        `Successful Payments: ${successfulPayments}\n` +
-        `Pending Payments: ${pendingPayments}\n` +
-        `Failed Payments: ${failedPayments}\n` +
-        `Total Revenue: ${formatMoney(totalRevenue)}\n` +
-        `Today's User Logins: ${todayLogins}`;
-    }
+    const userDetails = userRecords.map((user) => ({
+      name: user.name || "Not specified",
+      email: user.email || "Not specified",
+      phone: user.phone || "Not specified",
+      address: user.address || "Not specified",
+      registeredAt: user.createdAt || null,
+    }));
+
+    const adminContext = `
+LIVE EVENTZAA ADMIN DATABASE STATISTICS:
+
+Total registered users: ${totalUsers}
+
+Users registered today (India time): ${todayRegistrations}
+
+Total events: ${totalEvents}
+
+Published events: ${publishedEvents}
+
+Total bookings: ${totalBookings}
+
+Total payment records: ${totalPayments}
+
+Successful payments: ${successfulPayments.length}
+
+Pending payments: ${pendingPayments.length}
+
+Failed payments: ${failedPayments.length}
+
+Refunded payments: ${refundedPayments.length}
+
+Successful payment revenue raw amount: ${totalRevenue}
+
+Users logged in today: ${todayUsers}
+
+LATEST REGISTERED USER DETAILS (maximum 100 records):
+
+${JSON.stringify(safeJSON(userDetails), null, 2)}
+
+RECENT BOOKING RECORDS:
+
+${JSON.stringify(safeJSON(recentBookings), null, 2)}
+
+ADMIN INSTRUCTIONS:
+
+- Answer using the live database numbers above.
+- When asked for user details, use only the user records above and explain that the list is limited to the latest 100 users.
+- User profile details may be shown only because this request is on the authenticated admin endpoint.
+- Distinguish users registered today from users who logged in today.
+- If asked for booking details, list the relevant booking records.
+- Never invent statistics or records.
+- Payment revenue is the raw sum of the successful payment amount fields.
+- Confirm the payment model's currency unit before describing this amount as rupees.
+- If a requested field is unavailable, explain that clearly.
+`;
+
+    const answer = await getAIAnswer(
+      message,
+      history,
+      adminContext
+    );
 
     return res.status(200).json({
       success: true,
-      role: "admin",
-      reply,
-      data: databaseData,
+      answer,
+      reply: answer,
+      statistics: {
+        totalUsers,
+        todayRegistrations,
+        totalEvents,
+        publishedEvents,
+        totalBookings,
+        totalPayments,
+        successfulPayments: successfulPayments.length,
+        pendingPayments: pendingPayments.length,
+        failedPayments: failedPayments.length,
+        refundedPayments: refundedPayments.length,
+        totalRevenue,
+        todayUsers,
+      },
     });
   } catch (error) {
     console.error("Admin chatbot error:", error);
 
     return res.status(500).json({
       success: false,
-      message: "Admin chatbot failed.",
+      message: "Admin chatbot error. Please try again later.",
       error:
         process.env.NODE_ENV === "development"
           ? error.message

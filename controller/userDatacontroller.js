@@ -65,6 +65,14 @@ export const adduser = async (req, res) => {
 
     const normalizedEmail = email.trim().toLowerCase();
 
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(normalizedEmail)) {
+      return res.status(400).json({
+        status: 0,
+        success: false,
+        message: "Please enter a valid email address"
+      });
+    }
+
     // Check existing user
     const existingUser = await userData.findOne({
       email: normalizedEmail

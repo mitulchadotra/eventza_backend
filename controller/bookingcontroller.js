@@ -1,6 +1,44 @@
 import mongoose from "mongoose";
 import Booking from "../model/booking.js";
 
+const isAfterToday = (value, parsedDate) => {
+  const dateOnlyMatch =
+    typeof value === "string" &&
+    /^(\d{4})-(\d{2})-(\d{2})(?:$|T)/.exec(value);
+
+  let bookingDay;
+
+  if (dateOnlyMatch) {
+    const [, year, month, day] = dateOnlyMatch;
+    const dateOnly = new Date(
+      Date.UTC(Number(year), Number(month) - 1, Number(day))
+    );
+
+    if (
+      dateOnly.getUTCFullYear() !== Number(year) ||
+      dateOnly.getUTCMonth() !== Number(month) - 1 ||
+      dateOnly.getUTCDate() !== Number(day)
+    ) {
+      return false;
+    }
+
+    bookingDay = `${year}-${month}-${day}`;
+  } else {
+    const year = parsedDate.getFullYear();
+    const month = String(parsedDate.getMonth() + 1).padStart(2, "0");
+    const day = String(parsedDate.getDate()).padStart(2, "0");
+    bookingDay = `${year}-${month}-${day}`;
+  }
+
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
+    2,
+    "0"
+  )}-${String(now.getDate()).padStart(2, "0")}`;
+
+  return bookingDay > today;
+};
+
 // CREATE BOOKING
 export const addBooking = async (req, res) => {
   try {
@@ -51,6 +89,14 @@ export const addBooking = async (req, res) => {
         status: 0,
         success: false,
         message: "Invalid booking date.",
+      });
+    }
+
+    if (!isAfterToday(date, bookingDate)) {
+      return res.status(400).json({
+        status: 0,
+        success: false,
+        message: "Booking date must be after today.",
       });
     }
 
@@ -202,13 +248,35 @@ export const updateBooking = async (req, res) => {
     }
 
     // Payment state and owner cannot be changed through this endpoint.
-    const allowedFields = ["userName", "email", "date", "location", "quantity"];
+    const allowedFields = ["userName", "email", "location", "quantity"];
 
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) {
         booking[field] = req.body[field];
       }
     });
+
+    if (req.body.date !== undefined) {
+      const bookingDate = new Date(req.body.date);
+
+      if (Number.isNaN(bookingDate.getTime())) {
+        return res.status(400).json({
+          status: 0,
+          success: false,
+          message: "Invalid booking date.",
+        });
+      }
+
+      if (!isAfterToday(req.body.date, bookingDate)) {
+        return res.status(400).json({
+          status: 0,
+          success: false,
+          message: "Booking date must be after today.",
+        });
+      }
+
+      booking.date = bookingDate;
+    }
 
     if (req.body.quantity !== undefined) {
       const qty = Number(req.body.quantity);
