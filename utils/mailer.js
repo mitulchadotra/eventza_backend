@@ -1,84 +1,121 @@
-
 import dotenv from "dotenv";
+
 dotenv.config();
 
-const RESEND_API_URL = "https://api.resend.com/emails";
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
 
-export const sendLoginOtp = async (to, otp) => {
+const RESEND_FROM_EMAIL =
+  process.env.RESEND_FROM_EMAIL || "Eventzaa <onboarding@resend.dev>";
+
+// ================= CHECK CONFIGURATION =================
+
+const checkResendConfig = () => {
+  if (!RESEND_API_KEY) {
+    throw new Error("RESEND_API_KEY is missing in Render Environment");
+  }
+};
+
+// ================= TEST RESEND CONFIGURATION =================
+
+export const testGmailConnection = async () => {
+  checkResendConfig();
+  console.log("RESEND API CONFIGURATION SUCCESSFUL");
+  return true;
+};
+
+// ================= SEND OTP EMAIL =================
+
+export const sendOtpEmail = async (email, otp) => {
   try {
-    const apiKey = process.env.RESEND_API_KEY;
+    checkResendConfig();
 
-    // API key validation
-    if (!apiKey) {
-      console.error("RESEND_API_KEY is missing.");
-      throw new Error("Email service is not configured.");
+    if (!email || !otp) {
+      throw new Error("Email and OTP are required");
     }
 
-    if (!to || !otp) {
-      throw new Error("Recipient email or OTP is missing.");
-    }
-
-    // Default sender for Resend testing
-    const fromEmail =
-      process.env.RESEND_FROM_EMAIL ||
-      "Eventzaa <onboarding@resend.dev>";
-
-    const response = await fetch(RESEND_API_URL, {
+    const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${RESEND_API_KEY}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: fromEmail,
-        to: [to],
+        from: RESEND_FROM_EMAIL,
+        to: [email],
         subject: "Your Eventzaa Login OTP",
+
+        text: `Your Eventzaa login OTP is ${otp}.
+
+It expires in 5 minutes.
+Do not share this OTP with anyone.`,
+
         html: `
-          <div style="font-family:Arial;padding:25px;">
-            <h2 style="color:#263b80;">Eventzaa</h2>
-            <h3>Login Verification</h3>
-            <p>Your login OTP is:</p>
-            <h1 style="letter-spacing:8px;color:#263b80;">${String(otp).replace(/[&<>"']/g, "")}</h1>
-            <p>This OTP is valid for 5 minutes.</p>
-            <p>Do not share your OTP with anyone.</p>
+          <div style="
+            font-family: Arial, sans-serif;
+            max-width: 500px;
+            margin: auto;
+            padding: 25px;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            background: #ffffff;
+          ">
+            <h2 style="color: #2563eb;">
+              Eventzaa Login Verification
+            </h2>
+
+            <p>Hello,</p>
+            <p>Your login verification code is:</p>
+
+            <h1 style="
+              letter-spacing: 8px;
+              color: #2563eb;
+              background: #eff6ff;
+              padding: 15px;
+              text-align: center;
+              border-radius: 8px;
+            ">
+              ${otp}
+            </h1>
+
+            <p>This OTP expires in <b>5 minutes</b>.</p>
+
+            <p style="color: #dc2626;">
+              Do not share this OTP with anyone.
+            </p>
+
+            <hr />
+
+            <p style="color: #6b7280; font-size: 12px;">
+              This is an automated email from Eventzaa.
+              Please do not reply.
+            </p>
           </div>
         `,
       }),
       signal: AbortSignal.timeout(20000),
     });
 
-    const responseText = await response.text();
-
-    let result;
-    try {
-      result = responseText ? JSON.parse(responseText) : {};
-    } catch {
-      result = { message: responseText };
-    }
+    const result = await response.json();
 
     if (!response.ok) {
-      console.error("RESEND STATUS:", response.status);
-      console.error("RESEND RESPONSE:", result);
-      throw new Error("Resend rejected the email.");
+      console.error("RESEND API ERROR:", result);
+
+      throw new Error(
+        result.message || `Email sending failed: ${response.status}`
+      );
     }
 
     console.log("OTP EMAIL SENT:", result.id);
-    return result;
 
+    return result;
   } catch (error) {
-    console.error("OTP EMAIL ERROR:", error.message);
-    throw new Error("Unable to send OTP. Please try again later.");
+    console.error("RESEND EMAIL ERROR:", error.message);
+    throw error;
   }
 };
 
-export const sendOtpEmail = sendLoginOtp;
+// ================= CONTROLLER COMPATIBILITY =================
 
-export const testGmailConnection = async () => {
-  return Boolean(process.env.RESEND_API_KEY);
-};
+export const sendLoginOtp = sendOtpEmail;
 
-export default {
-  sendLoginOtp,
-  sendOtpEmail,
-  testGmailConnection,
-};
+export default sendOtpEmail;
